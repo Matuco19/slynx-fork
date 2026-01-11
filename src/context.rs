@@ -1,11 +1,11 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
-use color_eyre::{eyre::Result, owo_colors::OwoColorize};
+use color_eyre::{Report, eyre::Result, owo_colors::OwoColorize};
 
 use crate::{
-    checker::TypeChecker,
+    checker::{TypeChecker, error::TypeError},
     compiler::slynx_compiler::SlynxCompiler,
-    hir::SlynxHir,
+    hir::{SlynxHir, error::HIRError},
     intermediate::IntermediateRepr,
     parser::{
         Parser,
@@ -25,6 +25,7 @@ pub enum SlynxErrorType {
 }
 
 #[derive(Debug)]
+
 ///An error that will be shown if something fails
 pub struct SlynxError {
     ty: SlynxErrorType,
@@ -34,7 +35,7 @@ pub struct SlynxError {
     message: String,
     ///The file path the error occuried
     file: String,
-    source: String,
+    source_code: String,
 }
 impl std::error::Error for SlynxError {}
 
@@ -47,8 +48,8 @@ impl std::fmt::Display for SlynxError {
             SlynxErrorType::Compilation => "Compilation Error",
             SlynxErrorType::Type => "Type Checking Error",
         };
-        let source = format!("{} | {}", self.line, self.source);
-        let mut err = " ".repeat((self.column_end * 2).min(self.source.len()));
+        let source = format!("{} | {}", self.line, self.source_code);
+        let mut err = " ".repeat((self.column_end * 2).min(self.source_code.len()));
 
         err.replace_range(
             self.column_start - 1..err.len(),
@@ -153,83 +154,94 @@ impl SlynxContext {
             Err(e) => match e {
                 LexerError::UnrecognizedChar { index, .. } => {
                     let (line, column, src) = self.get_line_info(&self.entry_point, index);
-                    return Err(SlynxError {
+                    let err = SlynxError {
                         line,
                         ty: SlynxErrorType::Lexer,
                         column_start: column,
                         column_end: column,
                         message: e.to_string(),
                         file: self.entry_point.to_string_lossy().to_string(),
-                        source: src.to_string(),
-                    }
-                    .into());
+                        source_code: src.to_string(),
+                    };
+                    return Err(Report::new(err));
                 }
             },
         };
         let decls = match Parser::new(stream).parse_declarations() {
             Ok(v) => v,
             Err(e) => {
-                return match e {
-                    ParseError::UnexpectedToken(ref token, _) => {
+                return match e.downcast_ref::<ParseError>() {
+                    Some(ref err @ ParseError::UnexpectedToken(token, _)) => {
                         let (line, column, src) =
                             self.get_line_info(&self.entry_point, token.span.start);
-                        Err(SlynxError {
+                        let err = SlynxError {
                             line,
                             ty: SlynxErrorType::Parser,
                             column_start: column,
                             column_end: column + (token.span.end - token.span.start),
-                            message: e.to_string(),
+                            message: err.to_string(),
                             file: self.file_name(),
-                            source: src.to_string(),
-                        }
-                        .into())
+                            source_code: src.to_string(),
+                        };
+                        Err(e.wrap_err(err))
                     }
-                    ParseError::UnexpectedEndOfInput => {
+                    Some(ParseError::UnexpectedEndOfInput) => {
                         let (line, column, src) = self.get_line_info(
                             &self.entry_point,
                             self.lines.get(&self.entry_point).unwrap().len() - 1,
                         );
-                        Err(SlynxError {
+                        let err = SlynxError {
                             line,
                             ty: SlynxErrorType::Parser,
                             column_start: column,
                             column_end: column,
                             message: e.to_string(),
                             file: self.file_name(),
-                            source: src.to_string(),
-                        }
-                        .into())
+                            source_code: src.to_string(),
+                        };
+                        Err(e.wrap_err(err))
                     }
+                    None => Err(e),
                 };
             }
         };
         let mut hir = SlynxHir::new();
 
         if let Err(e) = hir.generate(decls) {
-            let (line, column, src) = self.get_line_info(&self.entry_point, e.span.start);
-            return Err(SlynxError {
-                line,
-                column_start: column,
-                column_end: column + (e.span.end - e.span.start),
-                ty: SlynxErrorType::Hir,
-                message: e.to_string(),
-                file: self.entry_point.to_string_lossy().to_string(),
-                source: src.to_string(),
+            match e.downcast_ref::<HIRError>() {
+                Some(err) => {
+                    let (line, column, src) = self.get_line_info(&self.entry_point, err.span.start);
+                    let err = SlynxError {
+                        line,
+                        column_start: column,
+                        column_end: column + (err.span.end - err.span.start),
+                        ty: SlynxErrorType::Hir,
+                        message: e.to_string(),
+                        file: self.entry_point.to_string_lossy().to_string(),
+                        source_code: src.to_string(),
+                    };
+                    return Err(e.wrap_err(err));
+                }
+                None => return Err(e),
             }
-            .into());
         }
         if let Err(e) = TypeChecker::check(&mut hir) {
-            let (line, column, src) = self.get_line_info(&self.entry_point, e.span.start);
-            return Err(SlynxError {
-                line,
-                column_start: column,
-                column_end: column + (e.span.end - e.span.start),
-                ty: SlynxErrorType::Type,
-                message: e.to_string(),
-                file: self.file_name(),
-                source: src.to_string(),
+            match e.downcast_ref::<TypeError>() {
+                Some(err) => {
+                    let (line, column, src) = self.get_line_info(&self.entry_point, err.span.start);
+                    let err = SlynxError {
+                        line,
+                        column_start: column,
+                        column_end: column + (err.span.end - err.span.start),
+                        ty: SlynxErrorType::Type,
+                        message: e.to_string(),
+                        file: self.file_name(),
+                        source_code: src.to_string(),
+                    };
+                    return Err(e.wrap_err(err));
+                }
+                _ => return Err(e),
             }
-            .into());
         };
         let mut ir = IntermediateRepr::new();
         ir.generate(hir.declarations);

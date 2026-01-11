@@ -7,13 +7,14 @@ use crate::parser::{
     error::ParseError,
     lexer::tokens::{Token, TokenKind},
 };
+use color_eyre::eyre::Result;
 
 impl Parser {
     ///Parses an component expression but, starting from the LBrace, assuming the name of the component is the provided `name`
     pub fn parse_component_expr_with_name(
         &mut self,
         name: GenericIdentifier,
-    ) -> Result<ComponentExpression, ParseError> {
+    ) -> Result<ComponentExpression> {
         let mut span = Span {
             start: name.span.start,
             end: 0,
@@ -57,12 +58,12 @@ impl Parser {
         self.expect(&TokenKind::RBrace)?;
         Ok(ComponentExpression { name, values, span })
     }
-    pub fn parse_component_expr(&mut self) -> Result<ComponentExpression, ParseError> {
+    pub fn parse_component_expr(&mut self) -> Result<ComponentExpression> {
         let ty = self.parse_type()?;
         self.parse_component_expr_with_name(ty)
     }
 
-    pub fn parse_named_expr(&mut self) -> Result<NamedExpr, ParseError> {
+    pub fn parse_named_expr(&mut self) -> Result<NamedExpr> {
         let Token {
             kind: TokenKind::Identifier(name),
             span: start,
@@ -82,7 +83,7 @@ impl Parser {
         })
     }
 
-    pub fn parse_object_expression(&mut self) -> Result<ASTExpression, ParseError> {
+    pub fn parse_object_expression(&mut self) -> Result<ASTExpression> {
         let name = self.parse_type()?;
         self.expect(&TokenKind::LParen)?;
         let mut fields = Vec::new();
@@ -107,7 +108,7 @@ impl Parser {
 
     ///Parses anything that comes withn identifier. This can be a function call, object creation, or a struct creation. This is executed without eating the identifier to be able to choose what to
     ///return
-    pub fn parse_identifier_exprs(&mut self) -> Result<Option<ASTExpression>, ParseError> {
+    pub fn parse_identifier_exprs(&mut self) -> Result<Option<ASTExpression>> {
         let after_identifier = &self.peek_at(1)?.kind;
         match after_identifier {
             TokenKind::Lt => {
@@ -119,7 +120,7 @@ impl Parser {
                         kind: ASTExpressionKind::Component(component),
                     }))
                 } else {
-                    Err(ParseError::UnexpectedToken(self.eat()?, "'{'".to_string()))
+                    Err(ParseError::UnexpectedToken(self.eat()?, "'{'".to_string()).into())
                 }
             }
             TokenKind::LBrace => {
@@ -143,7 +144,7 @@ impl Parser {
         }
     }
 
-    pub fn parse_primary(&mut self) -> Result<ASTExpression, ParseError> {
+    pub fn parse_primary(&mut self) -> Result<ASTExpression> {
         let expr = if let TokenKind::Identifier(_) = self.peek()?.kind
             && let Some(value) = self.parse_identifier_exprs()?
         {
@@ -187,7 +188,7 @@ impl Parser {
         }
     }
 
-    pub fn parse_multiplicative(&mut self) -> Result<ASTExpression, ParseError> {
+    pub fn parse_multiplicative(&mut self) -> Result<ASTExpression> {
         let mut lhs = self.parse_primary()?;
         while let Ok(curr) = self.peek()
             && matches!(curr.kind, TokenKind::Star | TokenKind::Slash)
@@ -212,7 +213,7 @@ impl Parser {
         }
         Ok(lhs)
     }
-    pub fn parse_additive(&mut self) -> Result<ASTExpression, ParseError> {
+    pub fn parse_additive(&mut self) -> Result<ASTExpression> {
         let mut lhs = self.parse_multiplicative()?;
         while let Ok(curr) = self.peek()
             && matches!(curr.kind, TokenKind::Plus | TokenKind::Sub)
@@ -239,10 +240,7 @@ impl Parser {
     }
 
     ///Parses a postfix that comes after a '.'. This function initializes right after the '.'
-    pub fn parse_dot_postfix(
-        &mut self,
-        prefix: ASTExpression,
-    ) -> Result<ASTExpression, ParseError> {
+    pub fn parse_dot_postfix(&mut self, prefix: ASTExpression) -> Result<ASTExpression> {
         let current = self.eat()?;
         match current.kind {
             TokenKind::Identifier(field) => Ok(ASTExpression {
@@ -255,14 +253,11 @@ impl Parser {
                     field,
                 },
             }),
-            _ => Err(ParseError::UnexpectedToken(
-                current,
-                "A field access".to_string(),
-            )),
+            _ => Err(ParseError::UnexpectedToken(current, "A field access".to_string()).into()),
         }
     }
 
-    pub fn parse_expression(&mut self) -> Result<ASTExpression, ParseError> {
+    pub fn parse_expression(&mut self) -> Result<ASTExpression> {
         let expr = self.parse_additive()?;
         Ok(expr)
     }

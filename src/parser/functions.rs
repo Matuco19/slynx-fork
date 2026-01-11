@@ -1,3 +1,5 @@
+use color_eyre::eyre::Result;
+
 use crate::parser::{
     Parser,
     ast::{ASTDeclaration, ASTDeclarationKind, ASTStatment, ASTStatmentKind, Span, TypedName},
@@ -7,7 +9,7 @@ use crate::parser::{
 
 impl Parser {
     ///Parses a typed name. A typed name is `name: type`, which is a name that contains a type
-    pub fn parse_typedname(&mut self) -> Result<TypedName, ParseError> {
+    pub fn parse_typedname(&mut self) -> Result<TypedName> {
         let Token {
             kind: TokenKind::Identifier(name),
             span,
@@ -28,7 +30,7 @@ impl Parser {
     }
 
     ///Parses the arguments of a function. It parses until the `)` of the function args.
-    pub fn parse_args(&mut self) -> Result<Vec<TypedName>, ParseError> {
+    pub fn parse_args(&mut self) -> Result<Vec<TypedName>> {
         let mut names = Vec::new();
         while !matches!(self.peek()?.kind, TokenKind::RParen) {
             names.push(self.parse_typedname()?);
@@ -44,7 +46,7 @@ impl Parser {
 
     ///Parses a function. The provided `span` is the initial span for the 'func' keyword.
     ///Parses both `func main(arg1:T): Q {...}` and `func main(arg1:T): Q -> ...`
-    pub fn parse_func(&mut self, span: Span) -> Result<ASTDeclaration, ParseError> {
+    pub fn parse_func(&mut self, span: Span) -> Result<ASTDeclaration> {
         let name = self.parse_type()?;
         self.expect(&TokenKind::LParen)?;
         let args = self.parse_args()?;
@@ -96,10 +98,7 @@ impl Parser {
                     },
                 })
             }
-            _ => Err(ParseError::UnexpectedToken(
-                current,
-                "'->' or '{'".to_string(),
-            )),
+            _ => Err(ParseError::UnexpectedToken(current, "'->' or '{'".to_string()).into()),
         }
     }
 }

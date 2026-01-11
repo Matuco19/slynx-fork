@@ -16,20 +16,19 @@ pub mod hir;
 pub mod intermediate;
 pub use context::*;
 
-pub fn compile_code(path: PathBuf) -> i32 {
-    let code = std::fs::read_to_string(&path).unwrap();
-    let tokens = parser::lexer::Lexer::tokenize(&code).unwrap();
+pub fn compile_code(path: PathBuf) -> color_eyre::eyre::Result<()> {
+    let code = std::fs::read_to_string(&path)?;
+    let tokens = parser::lexer::Lexer::tokenize(&code)?;
     let mut ast = parser::Parser::new(tokens);
-    let decls = ast.parse_declarations().unwrap();
+    let decls = ast.parse_declarations()?;
     let mut hir = SlynxHir::new();
 
-    hir.generate(decls).unwrap();
-    TypeChecker::check(&mut hir).unwrap();
+    hir.generate(decls)?;
+    TypeChecker::check(&mut hir)?;
     let mut intermediate = IntermediateRepr::new();
     intermediate.generate(hir.declarations);
     let compiler = WebCompiler::new();
     let code = compiler.compile(intermediate);
-    println!("Writing: \n{code:?}");
-    std::fs::write(path.with_extension("js"), code).unwrap();
-    0
+    std::fs::write(path.with_extension("js"), code)?;
+    Ok(())
 }

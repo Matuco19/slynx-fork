@@ -1,13 +1,13 @@
 use crate::parser::{
     ast::GenericIdentifier,
-    error::ParseError,
     lexer::tokens::{Token, TokenKind},
 };
+use color_eyre::eyre::Result;
 
 use super::Parser;
 impl Parser {
     ///Parses a type.
-    pub fn parse_type(&mut self) -> Result<GenericIdentifier, ParseError> {
+    pub fn parse_type(&mut self) -> Result<GenericIdentifier> {
         let Token {
             kind: TokenKind::Identifier(ident),
             mut span,

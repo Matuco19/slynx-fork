@@ -1,12 +1,13 @@
+use color_eyre::eyre::Result;
+
 use crate::parser::{
     Parser,
     ast::{ASTDeclaration, ASTDeclarationKind, ObjectField, Span, VisibilityModifier},
-    error::ParseError,
     lexer::tokens::{Token, TokenKind},
 };
 
 impl Parser {
-    pub fn parse_object(&mut self, start: Span) -> Result<ASTDeclaration, ParseError> {
+    pub fn parse_object(&mut self, start: Span) -> Result<ASTDeclaration> {
         let name = self.parse_type()?;
         self.expect(&TokenKind::LBrace)?;
         let mut fields = Vec::new();

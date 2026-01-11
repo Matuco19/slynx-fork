@@ -8,6 +8,8 @@ pub mod objects;
 mod statment;
 mod types;
 
+use color_eyre::eyre::{Report, Result};
+
 use crate::parser::{
     ast::ASTDeclaration,
     error::ParseError,
@@ -27,22 +29,24 @@ impl Parser {
         Parser { stream }
     }
 
-    pub fn eat(&mut self) -> Result<Token, ParseError> {
-        self.stream.next().ok_or(ParseError::UnexpectedEndOfInput)
+    pub fn eat(&mut self) -> Result<Token> {
+        self.stream
+            .next()
+            .ok_or(Report::new(ParseError::UnexpectedEndOfInput))
     }
 
-    pub fn peek_at(&self, idx: usize) -> Result<&Token, ParseError> {
+    pub fn peek_at(&self, idx: usize) -> Result<&Token> {
         self.stream
             .stream
             .get(idx)
-            .ok_or(ParseError::UnexpectedEndOfInput)
+            .ok_or(Report::new(ParseError::UnexpectedEndOfInput))
     }
 
-    pub fn peek(&self) -> Result<&Token, ParseError> {
+    pub fn peek(&self) -> Result<&Token> {
         self.peek_at(0)
     }
 
-    pub fn expect(&mut self, kind: &TokenKind) -> Result<Token, ParseError> {
+    pub fn expect(&mut self, kind: &TokenKind) -> Result<Token> {
         let token = self.eat()?;
         if std::mem::discriminant(&token.kind) == std::mem::discriminant(kind) {
             Ok(token)
@@ -54,11 +58,11 @@ impl Parser {
                 TokenKind::String(_) => "a string literal".to_string(),
                 _ => format!("'{kind}'",),
             };
-            Err(ParseError::UnexpectedToken(token, kind))
+            Err(ParseError::UnexpectedToken(token, kind).into())
         }
     }
 
-    pub fn parse_declarations(&mut self) -> Result<Vec<ASTDeclaration>, ParseError> {
+    pub fn parse_declarations(&mut self) -> Result<Vec<ASTDeclaration>> {
         let mut out = Vec::new();
         while let Ok(token) = self.peek() {
             match &token.kind {
@@ -84,7 +88,7 @@ impl Parser {
                     return Err(ParseError::UnexpectedToken(
                         self.eat()?,
                         "Either a macro name(a name terminated by '!' such as 'js!'), 'Component' or 'Func'".to_string(),
-                    ));
+                    ).into());
                 }
             }
         }

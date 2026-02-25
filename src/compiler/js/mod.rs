@@ -4,30 +4,34 @@ mod functions;
 mod helper;
 mod types;
 
-use std::{collections::HashMap, rc::Rc};
+use std::rc::Rc;
 
 use swc_atoms::Atom;
 use swc_common::{DUMMY_SP, SourceMap, SyntaxContext};
 use swc_ecma_ast::{
-    BinExpr, BinaryOp, CallExpr, Callee, Expr, ExprOrSpread, Ident, Lit, Number, Program,
-    ReturnStmt, Script, Stmt,
+    AssignExpr, AssignOp, AssignTarget, BinExpr, BinaryOp, BindingIdent, CallExpr, Callee, Decl,
+    Expr, ExprOrSpread, ExprStmt, Ident, Lit, MemberExpr, MemberProp, Number, Pat, Program,
+    ReturnStmt, Script, SimpleAssignTarget, Stmt, VarDecl, VarDeclKind, VarDeclarator,
 };
 use swc_ecma_codegen::{Config, Emitter, text_writer::JsWriter};
 
 use crate::{
-    compiler::slynx_compiler::SlynxCompiler,
-    hir::HirId,
+    compiler::{js::contexts::JsFunction, slynx_compiler::SlynxCompiler},
     intermediate::{
-        IntermediateRepr, context::IntermediateContext, expr::IntermediateExpr,
-        node::IntermediateInstruction,
+        IntermediateRepr,
+        context::IntermediateContext,
+        expr::{IntermediateExpr, IntermediateExprKind},
+        id::ContextHandle,
+        node::{IntermediateInstruction, IntermediateInstructionKind, IntermediatePlace},
     },
+    parser::ast::Operator,
 };
 
 #[derive(Debug, Default)]
 pub struct WebCompiler {
     script: Script,
-    names: HashMap<HirId, Ident>,
-    next_component_index: usize,
+    contexts: Vec<JsFunction>,
+    context_names: Vec<Ident>,
 }
 
 pub fn create_ident(s: &str) -> Ident {
@@ -37,35 +41,23 @@ pub fn create_ident(s: &str) -> Ident {
 impl WebCompiler {
     pub fn new() -> Self {
         Self {
-            names: HashMap::new(),
+            contexts: Vec::new(),
+            context_names: Vec::new(),
             script: Script::default(),
-            next_component_index: 0,
         }
     }
     ///Creates the new component name, binds it to be the name of the provided `id` and returns it
-    pub fn retrieve_next_component_name(&mut self, id: HirId) -> Ident {
-        let name = format!("c{}", self.next_component_index);
-        self.next_component_index += 1;
-        self.names.insert(id, create_ident(&name));
-        self.names.get(&id).cloned().unwrap()
-    }
-
-    pub fn get_name(&self, id: &HirId) -> &Ident {
-        self.names.get(id).expect("'get_name' should have returned, this is a bug where a name wasn't hoisted. Please check what's happening")
+    pub fn retrieve_next_component_name(&mut self, handle: ContextHandle) {
+        assert!(handle.0 == self.context_names.len());
+        let name = format!("c{}", handle.0);
+        self.context_names.push(create_ident(&name));
     }
 
     ///Creates the new func name, binds it to be the name of the provided `id` and returns it
-    pub fn retrieve_next_func_name(&mut self, id: HirId) -> Ident {
-        let name = format!("f{}", self.next_component_index);
-        self.next_component_index += 1;
-        self.names.insert(id, create_ident(&name));
-        self.names.get(&id).cloned().unwrap()
-    }
-
-    ///Maps the provided `id` to the provided `name` and returns it's indent
-    pub fn map_name(&mut self, id: HirId, name: &str) -> Ident {
-        self.names.insert(id, create_ident(name));
-        self.names.get(&id).cloned().unwrap()
+    pub fn retrieve_next_func_name(&mut self, handle: ContextHandle) {
+        assert!(handle.0 == self.context_names.len());
+        let name = format!("c{}", handle.0);
+        self.context_names.push(create_ident(&name));
     }
 }
 
@@ -77,18 +69,83 @@ impl SlynxCompiler for WebCompiler {
         instructions: &[IntermediateInstruction],
         ctx: &IntermediateContext,
         ir: &IntermediateRepr,
+        handle: ContextHandle,
     ) -> Vec<Self::StatmentType> {
         let mut out = Vec::with_capacity(instructions.len());
         for inst in instructions {
-            let stmt = match inst {
-                IntermediateInstruction::Ret(id) => {
-                    let expr = self.compile_expression(&ctx.exprs[*id], ctx, ir);
+            let stmt = match &inst.kind {
+                IntermediateInstructionKind::Ret(id) => {
+                    let expr = self.compile_expression(&ctx.exprs[*id], ctx, ir, handle);
                     Stmt::Return(ReturnStmt {
                         span: DUMMY_SP,
                         arg: Some(Box::new(expr)),
                     })
                 }
-                _ => unimplemented!(),
+                IntermediateInstructionKind::Alloc(v) => {
+                    let varslen = self.contexts[handle.0].variables.len();
+                    let ident = self.contexts[handle.0].create_variable(*v, &format!("v{varslen}"));
+                    Stmt::Decl(Decl::Var(Box::new(VarDecl {
+                        span: DUMMY_SP,
+                        ctxt: SyntaxContext::default(),
+                        decls: vec![VarDeclarator {
+                            span: DUMMY_SP,
+                            name: Pat::Ident(BindingIdent {
+                                type_ann: None,
+                                id: ident.clone(),
+                            }),
+                            init: None,
+                            definite: true,
+                        }],
+                        kind: VarDeclKind::Let,
+                        declare: false,
+                    })))
+                }
+                IntermediateInstructionKind::Move { target, value } => match target {
+                    IntermediatePlace::Local(n) => Stmt::Expr(ExprStmt {
+                        expr: Box::new(Expr::Assign(AssignExpr {
+                            span: DUMMY_SP,
+                            op: AssignOp::Assign,
+                            left: AssignTarget::Simple(SimpleAssignTarget::Ident(BindingIdent {
+                                id: {
+                                    let ctx = &mut self.contexts[handle.0];
+                                    ctx.retrieve_varname(*n).unwrap().clone()
+                                },
+                                type_ann: None,
+                            })),
+                            right: Box::new(self.compile_expression(
+                                &ctx.exprs[*value],
+                                ctx,
+                                ir,
+                                handle,
+                            )),
+                        })),
+                        span: DUMMY_SP,
+                    }),
+                    IntermediatePlace::Field { field, parent } => Stmt::Expr(ExprStmt {
+                        expr: Box::new(Expr::Assign(AssignExpr {
+                            span: DUMMY_SP,
+                            op: AssignOp::Assign,
+                            left: AssignTarget::Simple(SimpleAssignTarget::Member(MemberExpr {
+                                span: DUMMY_SP,
+                                obj: Box::new(Expr::Ident({
+                                    self.contexts[handle.0]
+                                        .retrieve_varname(*parent)
+                                        .cloned()
+                                        .unwrap()
+                                })),
+                                prop: MemberProp::Ident(format!("f{field}").into()),
+                            })),
+                            right: Box::new(self.compile_expression(
+                                &ctx.exprs[*value],
+                                ctx,
+                                ir,
+                                handle,
+                            )),
+                        })),
+                        span: DUMMY_SP,
+                    }),
+                },
+                u => unimplemented!("{:?}", u),
             };
             out.push(stmt);
         }
@@ -99,17 +156,23 @@ impl SlynxCompiler for WebCompiler {
         expr: &IntermediateExpr,
         ctx: &IntermediateContext,
         ir: &IntermediateRepr,
+        handle: ContextHandle,
     ) -> Self::ExpressionType {
-        match expr {
-            IntermediateExpr::Identifier(i) => Expr::Ident(self.names.get(i).unwrap().clone()),
-            IntermediateExpr::Int(int) => Expr::Lit(Lit::Num(Number {
+        match &expr.kind {
+            IntermediateExprKind::Identifier(name) => Expr::Ident(
+                self.contexts[handle.0]
+                    .retrieve_varname(*name)
+                    .unwrap()
+                    .clone(),
+            ),
+            IntermediateExprKind::Int(int) => Expr::Lit(Lit::Num(Number {
                 span: DUMMY_SP,
                 value: *int as f64,
                 raw: None,
             })),
-            IntermediateExpr::StringLiteral(s) => Expr::Lit(Lit::Str(ir.strings[s].into())),
-            IntermediateExpr::Component { id, props, .. } => {
-                let callee = Callee::Expr(Box::new(Expr::Ident(self.get_name(id).clone())));
+            IntermediateExprKind::StringLiteral(s) => Expr::Lit(Lit::Str(ir.strings[s].into())),
+            IntermediateExprKind::Component { props, id, .. } => {
+                let callee = Callee::Expr(Box::new(Expr::Ident(self.context_names[id.0].clone())));
                 let args = {
                     if props.iter().all(|v| v.is_none()) {
                         Vec::new()
@@ -123,6 +186,7 @@ impl SlynxCompiler for WebCompiler {
                                         &ctx.exprs[*expr_idx],
                                         ctx,
                                         ir,
+                                        handle,
                                     ))
                                 } else {
                                     Self::undefined()
@@ -139,16 +203,24 @@ impl SlynxCompiler for WebCompiler {
                     type_args: None,
                 })
             }
-            IntermediateExpr::Struct { id, exprs } => self.compile_struct(id, exprs, ctx, ir),
-            IntermediateExpr::FieldAccess { parent, field } => {
-                self.compile_field_access(*parent, *field, ctx, ir)
+            IntermediateExprKind::Struct { exprs, .. } => {
+                self.compile_struct(exprs, ctx, ir, handle)
             }
-            IntermediateExpr::Binary { lhs, rhs, .. } => Expr::Bin(BinExpr {
+            IntermediateExprKind::FieldAccess { parent, field } => {
+                self.compile_field_access(*parent, *field, ctx, ir, handle)
+            }
+            IntermediateExprKind::Binary { lhs, rhs, operator } => Expr::Bin(BinExpr {
                 span: DUMMY_SP,
-                op: BinaryOp::Add,
-                left: Box::new(self.compile_expression(&ctx.exprs[*lhs], ctx, ir)),
-                right: Box::new(self.compile_expression(&ctx.exprs[*rhs], ctx, ir)),
+                op: operator.to_binaryop(),
+                left: Box::new(self.compile_expression(&ctx.exprs[*lhs], ctx, ir, handle)),
+                right: Box::new(self.compile_expression(&ctx.exprs[*rhs], ctx, ir, handle)),
             }),
+            IntermediateExprKind::Float(n) => Expr::Lit(Lit::Num(Number {
+                span: DUMMY_SP,
+                value: *n as f64,
+                raw: None,
+            })),
+            IntermediateExprKind::Bool(b) => Expr::Lit(Lit::Bool((*b).into())),
             un => unimplemented!("{un:?}"),
         }
     }
@@ -156,10 +228,12 @@ impl SlynxCompiler for WebCompiler {
     ///The flattener has everything it's required
     fn compile(mut self, ir: IntermediateRepr) -> Vec<u8> {
         for ctx in ir.contexts.iter() {
-            self.hoist_ctx(ctx);
+            let mut context = JsFunction::new(ctx.id);
+            self.hoist_ctx(ctx, &mut context);
+            self.contexts.push(context);
         }
-        for ctx in &ir.contexts {
-            self.compile_ctx(ctx, &ir);
+        for ctx in ir.contexts.iter() {
+            self.compile_ctx(ctx, &ir, ctx.id);
         }
         {
             let mut buf = Vec::new();
@@ -174,6 +248,24 @@ impl SlynxCompiler for WebCompiler {
             };
             emitter.emit_program(&Program::Script(self.script)).unwrap();
             String::from_utf8(buf).unwrap().into_bytes()
+        }
+    }
+}
+
+impl Operator {
+    pub fn to_binaryop(&self) -> BinaryOp {
+        match self {
+            Self::LogicAnd => BinaryOp::LogicalAnd,
+            Self::LogicOr => BinaryOp::LogicalOr,
+            Self::Add => BinaryOp::Add,
+            Self::Sub => BinaryOp::Sub,
+            Self::Star => BinaryOp::Mul,
+            Self::Slash => BinaryOp::Div,
+            Self::Equals => BinaryOp::EqEqEq,
+            Self::GreaterThan => BinaryOp::Gt,
+            Self::LessThan => BinaryOp::Lt,
+            Self::GreaterThanOrEqual => BinaryOp::GtEq,
+            Self::LessThanOrEqual => BinaryOp::LtEq,
         }
     }
 }

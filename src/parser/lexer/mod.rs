@@ -41,6 +41,22 @@ impl Lexer {
         let mut idx = 0;
         while idx < chars.len() {
             let tk = match chars[idx] {
+                '&' => {
+                    if chars[idx + 1] == '&' {
+                        idx += 1;
+                        Token::and(idx)
+                    } else {
+                        Token::bitand(idx)
+                    }
+                }
+                '|' => {
+                    if chars[idx + 1] == '|' {
+                        idx += 1;
+                        Token::or(idx)
+                    } else {
+                        Token::bitor(idx)
+                    }
+                }
                 '.' => Token::dot(idx),
                 '(' => Token::lparen(idx),
                 ')' => Token::rparen(idx),
@@ -71,6 +87,7 @@ impl Lexer {
                         Token::eq(idx)
                     }
                 }
+
                 ':' => Token::colon(idx),
                 ',' => Token::comma(idx),
                 '+' => {
@@ -169,6 +186,14 @@ impl Lexer {
                     idx -= 1;
                     let span = Span { start, end: idx };
                     match buffer.as_str() {
+                        "let" => Token {
+                            kind: TokenKind::Let,
+                            span,
+                        },
+                        "mut" => Token {
+                            kind: TokenKind::Mut,
+                            span,
+                        },
                         "object" => Token {
                             kind: TokenKind::Object,
                             span,
@@ -187,6 +212,14 @@ impl Lexer {
                         },
                         "prop" => Token {
                             kind: TokenKind::Prop,
+                            span,
+                        },
+                        "true" => Token {
+                            kind: TokenKind::True,
+                            span,
+                        },
+                        "false" => Token {
+                            kind: TokenKind::False,
                             span,
                         },
                         _ => Token::identifier(&buffer, start, idx),

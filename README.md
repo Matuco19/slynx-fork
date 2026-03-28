@@ -1,269 +1,150 @@
 # Slynx
 
-> A data-oriented UI language for building cross-platform interfaces
+> Experimental UI language workspace focused on the frontend and middleend of the language.
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
 
-Slynx is an experimental programming language designed to create user interfaces that compile to multiple targets from a single codebase. It emphasizes readability, performance through data-oriented design, and platform independence.
+Slynx is an experimental programming language project for user interfaces. The long-term direction is to expose a reusable IR that downstream compilers can consume, but the current repository is primarily a library-first workspace for the language frontend and middleend.
 
-## Table of Contents
+## Current Status
 
-- [Why Slynx?](#why-slynx)
-- [Features](#features)
-- [Quick Start](#quick-start)
-- [Example](#example)
-- [Building from Source](#building-from-source)
-- [Project Status](#project-status)
-- [Contributing](#contributing)
-- [Inspirations](#inspirations)
-- [License](#license)
+Slynx is still experimental and under active design.
 
-## Why Slynx?
+What is true on the current `main` branch:
 
-### The Problem
+- the workspace is library-first; there is no official CLI binary target in `main` right now
+- the root crate can lex, parse, build HIR, run type checking, and lower source files into `IntermediateRepr`
+- the root library can write the current IR output to a sibling `.sir` file
+- sample `.slynx` sources live under [`slynx/`](slynx)
+- the IR design is still evolving, and the design reference in [`middleend/README.md`](middleend/README.md) is broader than what `main` emits today
 
-Modern UI frameworks face two major challenges:
+## Workspace Layout
 
-1. **Poor Readability**: Complex frameworks like JSX make it difficult to understand what's displayed on screen
-2. **Platform Lock-in**: Code written for one platform rarely works on another without significant changes
+The repository is currently split into these crates:
 
-### The Solution
+- [`common/`](common): shared AST types and common language data structures
+- [`frontend/`](frontend): lexer, parser, HIR generation, and type checking
+- [`middleend/`](middleend): `IntermediateRepr` and IR/lowering work
+- [`src/`](src): root library glue (`SlynxContext`, compile helpers, error presentation)
 
-Slynx addresses these issues through:
+## What Exists Today
 
-- **Clear Syntax**: Designed to be immediately understandable. If you look at Slynx code and think "what am I looking at?", we've failed.
-- **Data-Oriented Design**: Uses Structure of Arrays (SoA) by default for better performance, with Array of Structures (AoS) available when explicitly needed
-- **Cross-Platform Compilation**: Write once, compile to multiple targets (Web, native, mobile) through exposed IR and pluggable backends
-- **Frontend as Library**: The compiler frontend is designed as a reusable library that generates IR for custom backends
+The current codebase already includes:
 
-## Features
+- lexical analysis and parsing for core language constructs such as functions, objects, components, and basic control flow
+- HIR generation and name resolution
+- type checking and type inference for the current supported surface
+- lowering to the current `IntermediateRepr`
+- CI, release, governance, and contribution documentation
 
-- Component-based architecture
-- Strong type inference (Hindley-Milner)
-- Data-oriented by default
-- Reactive property system
-- Style inheritance
-- Pattern matching (planned)
-- Async/await support (planned)
+The current repository does **not** ship an official backend crate or an official CLI binary on `main`.
 
-## Quick Start
+## Getting Started
 
 ### Prerequisites
 
-- Rust 1.70 or higher
+- Rust stable
 - Cargo
 
-### Installation
+### Build and Validate the Workspace
 
 ```bash
-git clone https://github.com/cykna/slynx.git
+git clone https://github.com/Slynx-Language/slynx.git
 cd slynx
-cargo build --release
-```
-
-### Your First Program
-
-Create a file `hello.slx`:
-
-```slynx
-component HelloWorld {
-  Div {
-    P {
-      text: "Hello, Slynx!",
-    }
-  }
-}
-
-func main():Component -> HelloWorld;
-```
-
-Compile and run:
-
-```bash
-./target/release/Slynx --target hello.slx
-```
-
-Or using `just`:
-
-```bash
-just run hello.slx
-```
-
-## Example
-
-Here's a simple counter component demonstrating Slynx's syntax:
-
-```slynx
-style AppText(size: int, color:int) {
-  styleprop font_family = "Sans Serif";
-  styleprop font_size = size;
-  styleprop text_color = color;
-}
-
-style Rounded(pixels:int){
-  styleprop border_radius = pixels;
-}
-
-style RoundedCounter(color:int, round:int) inherits Rounded(round) {
-  styleprop color = color;
-}
-
-static style GeneralText = AppText(16,0xffffff);
-
-component Counter {
-  prop value = 0;
-  pub(parent) style: Style?;
-  
-  Div {
-    style: style matches Some(s) ? s : RoundedCounter(0xff0000, 24),
-    P {
-      text: value,
-      style: GeneralText
-    }
-    Button {
-      text: "Increase to be $(value+1)",
-      style: GeneralText,
-      on_click: event -> value += 1;
-    }
-  }
-}
-
-component AlotOfCounters<N:const int > 0>{
-  for i in 0..N do if i % 2 {
-    Counter{}
-  };
-}
-
-func main():Component -> AlotOfCounters<20>;
-```
-
-## Building from Source
-
-```bash
-# Clone the repository
-git clone https://github.com/cykna/slynx.git
-cd slynx
-
-# Build in release mode
-cargo build --release
-
-# Run tests
+cargo build
 cargo test
-
-# Format code
-cargo fmt
-
-# Run linter
-cargo clippy
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-## Project Status
+### Using the Library Today
 
-**Current State**: Experimental
+The root crate currently exposes helper functions for lowering a `.slynx` file into IR:
 
-The project is in active development with focus on:
-- Frontend implementation (lexer, parser, type system)
-- JavaScript code generation
-- Proving the multi-target compilation concept
+```rust
+use std::path::PathBuf;
 
-### Roadmap
+fn main() -> color_eyre::eyre::Result<()> {
+    let ir = slynx::compile_to_ir(PathBuf::from("slynx/component.slynx"))?;
+    println!("{ir:#?}");
+    Ok(())
+}
+```
 
-Legend: `[x]` Done | `[~]` In Progress | `[ ]` Planned
+If you want to write the current IR output to disk, use `slynx::compile_code(...)` or `SlynxContext::start_compilation(...)`. The output is written next to the input file with the `.sir` extension.
 
-#### Language Design
-- `[~]` Core vision and goals
-- `[~]` UI-oriented component model
-- `[~]` Function definitions (focusing on Components)
-- `[~]` Numeric and string types
-- `[ ]` Boolean type
-- `[~]` Object model
-- `[ ]` Structs
-- `[ ]` Enums
-- `[ ]` Serialization/Deserialization
-- `[ ]` Control flow model (if/match/loops)
-- `[ ]` Error model
+## Example Source
 
-#### Frontend Implementation
-- `[~]` Lexer (identifiers, keywords, numbers, strings)
-- `[~]` Parser (expressions, functions, components, objects)
-- `[~]` Type system with Hindley-Milner inference
-- `[ ]` Generic parameters
-- `[ ]` Pattern matching
-- `[ ]` Error recovery
+A small sample that matches the current repository syntax lives in [`slynx/component.slynx`](slynx/component.slynx):
 
-#### Backend & IR
-- `[ ]` SSA-based IR design
-- `[ ]` Data-oriented layout (SoA by default)
-- `[~]` JavaScript backend
-- `[ ]` Runtime support (reactivity, events)
-- `[ ]` DOM/UI binding
+```slynx
+component HelloBox {
+    pub prop seupai: float;
+    pub prop maria = 0;
 
-#### Tooling
-- `[~]` CONTRIBUTING.md
-- `[ ]` Language reference documentation
-- `[ ]` IR specification
-- `[ ]` Example applications
+    Div {
+        Text {
+            text: maria
+        }
+    }
+}
 
-For detailed roadmap, see [ROADMAP.md](ROADMAP.md) (if exists).
+func main(): Component {
+    HelloBox {
+        seupai: 5.0
+        maria: 12
+    }
+}
+```
+
+## Documentation Map
+
+Core project documents:
+
+- [CONTRIBUTING.md](CONTRIBUTING.md): contribution workflow and validation expectations
+- [GOVERNANCE.md](GOVERNANCE.md): project roles and decision structure
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md): community behavior expectations
+- [RELEASING.md](RELEASING.md): how repository tags and GitHub Releases are cut
+- [CHANGELOG.md](CHANGELOG.md): repository-level changelog
+- [middleend/README.md](middleend/README.md): IR design/specification reference
+- [docs/landing-content-inventory.md](docs/landing-content-inventory.md): grounded inventory of what can already be published on the landing page
+
+Operational templates:
+
+- [.github/pull_request_template.md](.github/pull_request_template.md)
+- [.github/ISSUE_TEMPLATE/bug_report.md](.github/ISSUE_TEMPLATE/bug_report.md)
+- [.github/ISSUE_TEMPLATE/feature_request.md](.github/ISSUE_TEMPLATE/feature_request.md)
+- [.github/ISSUE_TEMPLATE/documentation.md](.github/ISSUE_TEMPLATE/documentation.md)
+- [.github/ISSUE_TEMPLATE/discussion.md](.github/ISSUE_TEMPLATE/discussion.md)
+
+## Releases and Versioning
+
+The repository currently has a public tag, [`v0.0.1`](https://github.com/Slynx-Language/slynx/tags), created on 2026-03-21.
+
+At the time of writing, there is still no published GitHub Release page for that tag:
+
+- [GitHub Releases](https://github.com/Slynx-Language/slynx/releases)
+- [Git tags](https://github.com/Slynx-Language/slynx/tags)
+
+For the release process itself, see [RELEASING.md](RELEASING.md).
 
 ## Contributing
 
-We welcome contributions! Slynx requires significant work to reach maturity, and we can't do it alone.
+Contributions are welcome, especially in these areas:
 
-**How to contribute:**
-- Read our [Contributing Guide](CONTRIBUTING.md)
-- Check out [good first issues](https://github.com/cykna/slynx/labels/good%20first%20issue)
-- Join discussions in [GitHub Issues](https://github.com/cykna/slynx/issues)
+- frontend/parser/type-checker work
+- IR and middleend design
+- tests and regression coverage
+- documentation and specifications
 
-Areas where we need help:
-- Frontend development (parser, type system)
-- Backend implementations
-- Documentation
-- Testing
-- Example applications
-
-## Inspirations
-
-### UI Design
-- **QML**: Component-based UI declaration
-- **Slint**: Modern UI language design
-
-### Language Features
-- **Rust**: Type system, ownership concepts, error handling
-- **Swift**: Syntax clarity, property observers
-- **JavaScript**: Async/await, flexibility
-
-## Architecture
-
-Slynx separates the frontend (parser, type checker) from backends (code generators):
-
-```
-Slynx Source → Frontend → IR → Backend → Target Code
-                                 ↓
-                          (Web, Native, Mobile)
-```
-
-This architecture allows:
-- Consistent error checking across all platforms
-- Community-driven backend development
-- Easy addition of new compilation targets
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) before opening a PR.
 
 ## Community
 
-- **Issues**: Report bugs and request features on [GitHub Issues](https://github.com/cykna/slynx/issues)
-- **Discussions**: Join conversations in [GitHub Discussions](https://github.com/cykna/slynx/discussions)
-- **Contributing**: See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
+- [GitHub Issues](https://github.com/Slynx-Language/slynx/issues)
+- [GitHub Discussions](https://github.com/Slynx-Language/slynx/discussions)
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-
-## Acknowledgments
-
-Thanks to all contributors who help make Slynx better!
-
----
-
-**Note**: Slynx is experimental software under active development. APIs and language features may change significantly.
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.

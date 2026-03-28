@@ -1,18 +1,16 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use color_eyre::{Report, eyre::Result, owo_colors::OwoColorize};
 
-use crate::{
-    checker::{TypeChecker, error::TypeError},
-    compiler::slynx_compiler::SlynxCompiler,
-    hir::{SlynxHir, error::HIRError},
-    intermediate::IntermediateRepr,
-    parser::{
-        Parser,
-        error::ParseError,
-        lexer::{Lexer, error::LexerError},
-    },
-};
+use frontend::checker::{TypeChecker, error::TypeError};
+use frontend::hir::{SlynxHir, error::HIRError};
+use frontend::lexer::{Lexer, error::LexerError};
+use frontend::parser::{Parser, error::ParseError};
+use middleend::{IRError, SlynxIR};
 
 #[derive(Debug)]
 ///The type of the error that was generated
@@ -47,6 +45,38 @@ pub struct SlynxError {
     source_code: String,
 }
 impl std::error::Error for SlynxError {}
+
+#[derive(Debug)]
+pub struct CompilationOutput {
+    output_path: PathBuf,
+    ir: SlynxIR,
+}
+
+impl CompilationOutput {
+    ///Creates a new compilation output with the provided `ir`. Writes the `ir` in its textual format on the provided `entry_point` with extension of `sir`
+    fn new(entry_point: &Path, ir: SlynxIR) -> Self {
+        Self {
+            output_path: entry_point.with_extension("sir"),
+            ir,
+        }
+    }
+
+    ///Consumes and retrieves the IR of this compilation output
+    pub fn ir(self) -> SlynxIR {
+        self.ir
+    }
+
+    ///Retrieves the path where this compilation output should write the IR at
+    pub fn output_path(&self) -> &Path {
+        &self.output_path
+    }
+
+    ///Writes the IR of this output into the path of `output_path()`
+    pub fn write(&self) -> Result<()> {
+        std::fs::write(&self.output_path, format!("{:#?}", self.ir))?;
+        Ok(())
+    }
+}
 
 impl std::fmt::Display for SlynxError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -160,10 +190,23 @@ impl SlynxContext {
         self.entry_point.to_string_lossy().to_string()
     }
 
-    pub fn start_compilation<S: SlynxCompiler>(self, compiler: S) -> Result<()> {
+    ///Compiles the code from the current contexts and returns the compilation result including the IR
+    pub fn compile(self) -> Result<CompilationOutput> {
         let stream = match Lexer::tokenize(self.get_entry_point_source()) {
             Ok(value) => value,
             Err(e) => match e {
+                LexerError::MalformedNumber { init, .. } => {
+                    let (line, column, src) = self.get_line_info(&self.entry_point, init);
+                    let err = SlynxError {
+                        line,
+                        ty: SlynxErrorType::Lexer,
+                        column_start: column,
+                        message: e.to_string(),
+                        file: self.entry_point.to_string_lossy().to_string(),
+                        source_code: src.to_string(),
+                    };
+                    return Err(Report::new(err));
+                }
                 LexerError::UnrecognizedChar { index, .. } => {
                     let (line, column, src) = self.get_line_info(&self.entry_point, index);
                     let err = SlynxError {
@@ -198,7 +241,7 @@ impl SlynxContext {
                     Some(ParseError::UnexpectedEndOfInput) => {
                         let (line, column, src) = self.get_line_info(
                             &self.entry_point,
-                            self.lines.get(&self.entry_point).unwrap().len() - 1,
+                            self.lines.get(&self.entry_point).unwrap().len().max(1) - 1,
                         );
                         let err = SlynxError {
                             line,
@@ -232,7 +275,7 @@ impl SlynxContext {
                 None => return Err(e),
             }
         }
-        let module = match TypeChecker::check(&mut hir) {
+        let types_module = match TypeChecker::check(&mut hir) {
             Err(e) => match e.downcast_ref::<TypeError>() {
                 Some(err) => {
                     let (line, column, src) = self.get_line_info(&self.entry_point, err.span.start);
@@ -250,12 +293,45 @@ impl SlynxContext {
             },
             Ok(module) => module,
         };
-        let mut ir = IntermediateRepr::new();
+        let mut ir = SlynxIR::new(hir.symbols_module);
 
-        ir.generate(hir.declarations, module);
+        if let Err(e) = ir.generate(hir.declarations, &types_module) {
+            match e {
+                IRError::UnrecognizedVariable(_) => {}
+                IRError::DeclarationNotRecognized(_) => {}
+                IRError::IRTypeNotRecognized(e) => {
+                    let Some(name) = types_module.get_type_name(&e).cloned() else {
+                        unreachable!(
+                            "Type {e:?} isnt recognized by the types module? Something wrong ain't right"
+                        )
+                    };
+                    let (line, column, _) = self.get_line_info(&self.entry_point, 0);
+                    return Err(SlynxError {
+                        line,
+                        column_start: column,
+                        ty: SlynxErrorType::Type,
+                        message: format!(
+                            "IR internal error: Type '{:?}' is not recognized by the IR",
+                            ir.string_pool().get_name(name)
+                        ),
+                        file: self.file_name(),
+                        source_code: "Not Required. HIR -> IR error".into(),
+                    }
+                    .into());
+                }
+            }
+            return Err(color_eyre::eyre::eyre!(format!(
+                "IR Generation Error: {:?}",
+                e
+            )));
+        };
+        let output = CompilationOutput::new(self.entry_point.as_ref(), ir);
+        Ok(output)
+    }
 
-        let out = compiler.compile(ir);
-        std::fs::write(self.entry_point.with_extension("js"), out)?;
+    pub fn start_compilation(self) -> Result<()> {
+        let output = self.compile()?;
+        output.write()?;
         Ok(())
     }
 }

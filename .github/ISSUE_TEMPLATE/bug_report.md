@@ -1,36 +1,58 @@
 ---
 name: Bug Report
-about: Report a bug or issue
+about: Report a bug or regression in the language, tooling, or repository workflow
 title: "[BUG] "
 labels: bug
-assignees: ''
-
+assignees: ""
 ---
 
-## Description
-A clear and concise description of the bug.
+## Summary
 
-## Steps to Reproduce
+Describe the bug clearly and concisely.
+
+## Reproduction
+
+List the minimum steps needed to reproduce the problem.
+
 1. Step 1
 2. Step 2
 3. Step 3
-4. See error
 
 ## Expected Behavior
-What you expected to happen.
+
+What should have happened?
 
 ## Actual Behavior
-What actually happened.
 
-## Environment
-- OS: [e.g., Ubuntu 22.04, Windows 11, macOS 13]
-- Rust version: [e.g., 1.75.0]
-- Slynx version/commit: [e.g., commit abc123]
+What happened instead?
 
-## Code Sample
+## Affected Area
+
+Mark the area that seems affected:
+
+- [ ] frontend / lexer
+- [ ] frontend / parser
+- [ ] frontend / HIR
+- [ ] frontend / checker
+- [ ] middleend / IR
+- [ ] documentation
+- [ ] CI / workflow
+- [ ] other
+
+## Reproduction Sample
+
 ```slynx
-// Your Slynx code that reproduces the issue
+// Minimal `.slynx` sample when applicable
 ```
 
-## Additional Context
-Add any other context about the problem here (screenshots, error messages, etc).
+If the bug is not source-related, paste the smallest relevant snippet, command, or log excerpt instead.
+
+## Environment
+
+- OS:
+- Rust version:
+- Slynx commit/tag:
+
+## Extra Context
+
+Add screenshots, logs, suspected causes, or related PRs/issues here.

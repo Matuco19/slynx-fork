@@ -3,15 +3,19 @@ name = "slynx"
 version = "0.1.0"
 edition = "2024"
 
-[build-dependencies]
-lalrpop = "0.22.2"
+[workspace.dependencies]
+smallvec = "1.15.1"
+color-eyre = "0.6.5"
 
 [dependencies]
 clap = { version = "4.5.52", features = ["derive"] }
-color-eyre = "0.6.5"
-rart = "0.2.1"
-swc_atoms = "9.0.0"
-swc_common = "18.0.1"
-swc_ecma_ast = "19.0.0"
-swc_ecma_codegen = "21.0.0"
+color-eyre={workspace=true}
+middleend = {path="./middleend"}
+frontend = {path="./frontend"}
 
+[workspace]
+members = [
+  ".",
+  "middleend",
+  "frontend",
+]

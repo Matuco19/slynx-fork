@@ -5,5 +5,6 @@ object Pessoa{
 func p(a:int,b:int,c:int):int {
     let mut p = Pessoa(name: "John", age:10);
     p.age = 55;
+    p = Pessoa(name: "Maria", age: p.age);
     p.age
 }

@@ -1,29 +1,45 @@
 ---
 name: Feature Request
-about: Suggest a new feature or improvement
+about: Suggest a language, compiler, workflow, or repository improvement
 title: "[FEATURE] "
 labels: enhancement
-assignees: ''
-
+assignees: ""
 ---
 
+## Summary
+
+Describe the feature or improvement.
+
 ## Problem
-What problem does this feature solve? Is your feature request related to a problem?
+
+What limitation, pain point, or missing capability does this address?
 
 ## Proposed Solution
-A clear and concise description of what you want to happen.
+
+Describe the direction you want to see.
 
 ## Alternatives Considered
-Describe any alternative solutions or features you've considered.
 
-## Use Case Example
-How would this feature be used? Provide code examples if applicable.
+List any alternatives, tradeoffs, or rejected approaches.
+
+## Impact Area
+
+Mark the area most affected:
+
+- [ ] syntax / language design
+- [ ] frontend / parser
+- [ ] frontend / checker
+- [ ] middleend / IR
+- [ ] docs / workflow
+- [ ] tooling / CI
+- [ ] other
+
+## Example
+
 ```slynx
-// Example of how the feature would be used
+// Minimal example showing how the feature would be used
 ```
 
-## Additional Context
-Add any other context, mockups, or screenshots about the feature request here.
+## Extra Context
 
-## Benefits
-Why would this feature be valuable to Slynx users?
+Add links, related discussions, mockups, or implementation notes here.

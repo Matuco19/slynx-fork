@@ -1,0 +1,32 @@
+
+component Header {
+    Div {
+        Icon {
+            src: "https://github.icon.this.url.does_not_exist.com"
+        }
+    }
+}
+
+component Footer {
+    Div {
+        Text {text: "Footer of page"}
+    }
+}
+
+component Main {
+    Div {
+        Text {text: "Main Part"}
+    }
+}
+
+component Website {
+    Div {
+        Header {}
+        Main {}
+        Footer {}
+    }
+}
+
+func main(): Component {
+    Website {}
+}

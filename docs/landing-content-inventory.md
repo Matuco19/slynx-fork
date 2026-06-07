@@ -22,6 +22,10 @@ These files are the main factual references for landing-page content:
 
 - [README.md](../README.md): project overview, workspace layout, current status, and current
   release/tag status
+- [docs/language-surface.md](language-surface.md): grounded overview of the current syntax that
+  `main` already supports
+- [docs/first-slynx-file.md](first-slynx-file.md): short onboarding guide with a real `.slynx`
+  example
 - [CONTRIBUTING.md](../CONTRIBUTING.md): contribution workflow and validation expectations
 - [GOVERNANCE.md](../GOVERNANCE.md): maintainership and decision structure
 - [RELEASING.md](../RELEASING.md): release/tag process
@@ -42,8 +46,8 @@ Safe claims today:
 - Slynx is an experimental UI language project
 - the current repository is library-first
 - the current workspace is focused on the frontend and middleend of the language
-- `main` can lex, parse, build HIR, run type checking, and lower to the current `IntermediateRepr`
-- the root crate can write the current IR output to a sibling `.sir` file
+- `main` can lex, parse, build HIR, run type checking, resolve the current alias surface, and lower to the current `SlynxIR`
+- the root crate can write the default `.sir` output and can expose `.hir` / `.ir` dumps through `SlynxContext::build_stages()`
 
 Evidence:
 
@@ -66,7 +70,7 @@ Safe content:
 
 - `common/`: shared AST and common language structures
 - `frontend/`: lexer, parser, HIR generation, and type checking
-- `middleend/`: current IR/lowering work
+- `middleend/`: current `SlynxIR` and IR/lowering work
 - root crate: compile helpers, context, and error presentation
 
 Evidence:
@@ -95,8 +99,35 @@ Evidence:
 
 - [README.md](../README.md)
 - [CONTRIBUTING.md](../CONTRIBUTING.md)
+- [docs/first-slynx-file.md](first-slynx-file.md)
 
-### 4. Public Library Entry Points
+### 4. Current Language Surface
+
+Status: `Implemented`
+
+Safe content:
+
+- top-level `object`, `component`, and `func` declarations
+- top-level `alias` declarations
+- block-bodied and arrow-bodied functions
+- `let` / `let mut`
+- assignment
+- `while`
+- function calls, including zero-argument calls
+- tuple types and tuple literals
+- object expressions
+- component expressions
+- field access
+- arithmetic/comparison/logical/bitwise binary expressions
+- `if` expressions
+
+Evidence:
+
+- [docs/language-surface.md](language-surface.md)
+- [frontend/src/parser](../frontend/src/parser)
+- [frontend/tests/parser.rs](../frontend/tests/parser.rs)
+
+### 5. Public Library Entry Points
 
 Status: `Implemented`, but narrow
 
@@ -105,6 +136,9 @@ Safe content:
 - `slynx::compile_code(...)`
 - `slynx::compile_to_ir(...)`
 - `SlynxContext`
+- `SlynxContext::build_stages()`
+- `CompilationStages`
+- `.hir` / `.ir` dump writing through the library API
 - public module re-exports for `checker`, `hir`, `lexer`, and `parser`
 
 Evidence:
@@ -115,10 +149,11 @@ Evidence:
 Important limitation:
 
 - there is not yet a polished, versioned API reference for the whole project
+- the dump outputs are still debug-style textual artifacts, not a stable versioned public format
 - landing content can mention the public entry points, but should not pretend a complete API
-  reference already exists
+  reference or polished CLI workflow already exists
 
-### 5. Governance / Community / Releases
+### 6. Governance / Community / Releases
 
 Status: `Implemented`
 
@@ -208,7 +243,8 @@ These topics should not be published as current product features:
 
 - official CLI binary on `main`
 - official backend compiler on `main`
-- stable textual `.hir` / `.ir` artifact generation on `main`
+- polished CLI flags/workflow for dump generation on `main`
+- stable versioned textual `.hir` / `.ir` dump contracts
 - implemented component slots
 - implemented reactive graph lowering
 - stable generics / monomorphization pipeline
@@ -241,7 +277,7 @@ Good candidates to turn into landing/docs pages now:
 
 Start small and honest:
 
-- root helpers: `compile_code`, `compile_to_ir`, `SlynxContext`
+- root helpers: `compile_code`, `compile_to_ir`, `SlynxContext`, `build_stages`
 - note that broader API reference is still incomplete
 
 ### Features
@@ -251,7 +287,9 @@ Only present features with strict wording:
 - lexer + parser
 - HIR generation
 - type checking
-- lowering to current `IntermediateRepr`
+- lowering to current `SlynxIR`
+- aliases, tuple literals/types, and `while` in the current frontend surface
+- library-side `.hir` / `.ir` / `.sir` dump generation
 - CI + release/tag workflow
 
 Avoid broad claims like:

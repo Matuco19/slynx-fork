@@ -209,7 +209,7 @@ Relevant contribution types include:
 
 The community includes anyone who:
 
-- participates in the project's Discord server
+- participates in the project's [Discord server](https://discord.gg/B4pHKHqNxG)
 - uses the language
 - follows or joins project discussions
 - consumes or creates content related to the language

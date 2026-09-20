@@ -1,9 +1,14 @@
 use crate::{
-    SymbolPointer,
+    ComponentId, SymbolPointer,
     model::{HirExpression, HirType},
 };
 
-use common::Span;
+use common::{Span, pool::DedupPoolId};
+use module_loader::FileId;
+
+/// A temporary component key used during signature resolution.
+/// (FileId, SymbolPointer) identifies a component before its ComponentId is created.
+pub type ComponentKey = (FileId, SymbolPointer);
 
 /// An error produced during HIR generation or type checking.
 ///
@@ -17,9 +22,70 @@ pub struct HIRError {
     pub span: Span,
 }
 
+#[derive(Debug)]
+pub enum InvalidWriteReason {
+    ImmutableVariable(SymbolPointer),
+    ExpressionNotAssignable,
+    ReferenceImmutable,
+}
+
+#[derive(Debug)]
+pub enum NotMutableReason {
+    ImmutableVariable(SymbolPointer),
+    ExpressionNotAssignable,
+}
+
 /// All possible error kinds that can occur during HIR generation.
 #[derive(Debug)]
 pub enum HIRErrorKind {
+    ///Error that occurs when a type is used like an enum, but isn't
+    InvalidEnumUsage(DedupPoolId<HirType>),
+
+    MethodNotFound(SymbolPointer),
+    StaticMethodNotFound(SymbolPointer),
+    InvalidTypeAccess,
+    ExpressionNotMutable(NotMutableReason),
+    InvalidDeref,
+    ArrayLengthMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    MissingReturn,
+
+    /// A raw-valued enum variant (`Name = <expr>`) had a non-integer value.
+    EnumVariantNotAnInt(SymbolPointer),
+
+    /// A `matches` expression's left-hand side is not an enum value.
+    MatchesOnNonEnum(DedupPoolId<HirType>),
+
+    /// The right-hand side of a `matches` expression is not a valid pattern
+    /// (a bare variant name or a variant call).
+    InvalidPattern,
+
+    /// A name was referenced as an enum variant, but no reachable enum
+    /// declares a variant with that name.
+    VariantNotRecognized(SymbolPointer),
+
+    /// An enum was declared with an unsupported representation (only `int` is
+    /// supported for raw/raw-valued enums).
+    InvalidEnumRepresentation(SymbolPointer),
+
+    UnexpectedType {
+        expected: DedupPoolId<HirType>,
+        received: DedupPoolId<HirType>,
+    },
+    ///Invalid indexing error occurs when the expression being indexed cannot be indexed. So 5[12] cannot be indexed, which then gives this error
+    InvalidIndexing(DedupPoolId<HirType>),
+    ///Couldnt infer is an error when the type of something could not be inferred
+    CouldntInfer,
+    NotAComponent(SymbolPointer),
+    ComponentPropertyMissingType,
+    ComponentNotFound(SymbolPointer),
+
+    InvalidWrite(InvalidWriteReason),
+
+    ///An invalid field access occurs when some invalid expression is used to access a field. For example 'struct."j"' this is invalid because we cannot index things with strings since the struct layout is not runtime based
+    InvalidFieldAccess,
     /// A type name was used but is not defined in the current scope.
     TypeNotRecognized(SymbolPointer),
     /// An identifier was used but is not defined in the current scope.
@@ -29,12 +95,12 @@ pub enum HIRErrorKind {
     /// A field access was attempted on a type that does not support it.
     InvalidFieldAccessTarget {
         /// The type that was incorrectly accessed.
-        ty: HirType,
+        ty: DedupPoolId<HirType>,
     },
     /// A tuple index access was attempted on a non-tuple type.
     InvalidTupleAccessTarget {
         /// The type that was incorrectly accessed.
-        ty: HirType,
+        ty: DedupPoolId<HirType>,
     },
     /// A tuple was indexed out of bounds.
     InvalidTupleIndex {
@@ -59,6 +125,7 @@ pub enum HIRErrorKind {
     PropertyNotRecognized {
         /// The names of the unrecognized properties.
         prop_names: Vec<SymbolPointer>,
+        ty: DedupPoolId<HirType>,
     },
     /// A property was accessed that exists but is not visible from the current context.
     PropertyNotVisible {
@@ -77,7 +144,7 @@ pub enum HIRErrorKind {
     /// A type definition is recursive without indirection, which is not allowed.
     RecursiveType {
         /// The type symbol that is recursive.
-        ty: SymbolPointer,
+        ty: DedupPoolId<HirType>,
     },
     /// A call was made to a value that is not a function.
     NotAFunction(SymbolPointer, HirType),
@@ -106,9 +173,205 @@ pub enum HIRErrorKind {
         ///The name of the definition that is invalid
         name: SymbolPointer,
     },
+    /// A declaration name resolves to multiple files (ambiguous import).
+    AmbiguousDeclaration {
+        /// The name that is ambiguous.
+        name: SymbolPointer,
+        /// The first file where the declaration was found.
+        first: FileId,
+        /// The second file where the declaration was found.
+        second: FileId,
+    },
+    /// An intrinsic was referenced but is not registered (e.g. missing std library).
+    IntrinsicNotRegistered {
+        /// The name of the intrinsic that was not found.
+        name: SymbolPointer,
+    },
+    /// A chain of component signatures is cyclic.
+    CyclicComponentSignature {
+        /// The component that triggered the cycle.
+        component: SymbolPointer,
+        /// The chain of (FileId, SymbolPointer) pairs forming the cycle.
+        chain: Vec<ComponentKey>,
+    },
+    /// A component body resolution re-entered itself (body → ... → body cycle).
+    CyclicComponentBody {
+        /// The component whose body caused the cycle.
+        component: ComponentId,
+    },
+    /// A generic function was called with the wrong number of explicit type
+    /// arguments (e.g. `compare<int>(a, b)` on a `func compare<T, U>`).
+    GenericArityMismatch {
+        /// The name of the generic function being instantiated.
+        func: SymbolPointer,
+        /// The number of type parameters the function declares.
+        declared: usize,
+        /// The number of type arguments supplied at the call site.
+        supplied: usize,
+    },
+    /// Monomorphizing a generic function would never terminate because each
+    /// instantiation requests a new, larger instantiation (e.g. a function
+    /// whose generic argument grows without bound).
+    CyclicMonomorphization {
+        /// The name of the function whose instantiation cycles.
+        func: SymbolPointer,
+        /// The generic type arguments that keep growing.
+        args: Vec<DedupPoolId<HirType>>,
+    },
 }
 
 impl HIRError {
+    pub fn not_an_enum(ty: DedupPoolId<HirType>, span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::InvalidEnumUsage(ty),
+            span,
+        }
+    }
+
+    pub fn method_not_found(name: SymbolPointer, span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::MethodNotFound(name),
+            span,
+        }
+    }
+
+    pub fn static_method_not_found(name: SymbolPointer, span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::StaticMethodNotFound(name),
+            span,
+        }
+    }
+
+    pub fn invalid_type_access(span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::InvalidTypeAccess,
+            span,
+        }
+    }
+
+    pub fn expression_not_mutable(reason: NotMutableReason, span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::ExpressionNotMutable(reason),
+            span,
+        }
+    }
+
+    pub fn invalid_deref(span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::InvalidDeref,
+            span,
+        }
+    }
+    pub fn array_length_mismatch(expected: usize, actual: usize, span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::ArrayLengthMismatch { expected, actual },
+            span,
+        }
+    }
+    pub fn missing_return(span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::MissingReturn,
+            span,
+        }
+    }
+
+    pub fn enum_variant_must_be_an_int(name: SymbolPointer, span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::EnumVariantNotAnInt(name),
+            span,
+        }
+    }
+
+    pub fn matches_on_non_enum(ty: DedupPoolId<HirType>, span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::MatchesOnNonEnum(ty),
+            span,
+        }
+    }
+
+    pub fn invalid_pattern(span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::InvalidPattern,
+            span,
+        }
+    }
+
+    pub fn variant_unrecognized(name: SymbolPointer, span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::VariantNotRecognized(name),
+            span,
+        }
+    }
+
+    pub fn invalid_enum_representation(name: SymbolPointer, span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::InvalidEnumRepresentation(name),
+            span,
+        }
+    }
+
+    pub fn invalid_indexing(expr_type: DedupPoolId<HirType>, span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::InvalidIndexing(expr_type),
+            span,
+        }
+    }
+    pub fn unexpected_type(
+        received: DedupPoolId<HirType>,
+        expected: DedupPoolId<HirType>,
+        span: Span,
+    ) -> Self {
+        Self {
+            kind: HIRErrorKind::UnexpectedType { received, expected },
+            span,
+        }
+    }
+    pub fn couldnt_infer(span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::CouldntInfer,
+            span,
+        }
+    }
+    pub fn component_not_found(name: SymbolPointer, span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::ComponentNotFound(name),
+            span,
+        }
+    }
+
+    pub fn component_missing_prop_type(span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::ComponentPropertyMissingType,
+            span,
+        }
+    }
+
+    pub fn invalid_ref_write(span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::InvalidWrite(InvalidWriteReason::ReferenceImmutable),
+            span,
+        }
+    }
+
+    pub fn invalid_variable_write(name: SymbolPointer, span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::InvalidWrite(InvalidWriteReason::ImmutableVariable(name)),
+            span,
+        }
+    }
+    pub fn invalid_expr_write(span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::InvalidWrite(InvalidWriteReason::ExpressionNotAssignable),
+            span,
+        }
+    }
+    pub fn invalid_field_access(span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::InvalidFieldAccess,
+            span,
+        }
+    }
+
     ///Creates a new `InvalidStyleDefinition` error, where the name of the style definition is the given `name` and the given `span` is
     ///the span on the code that generated so
     pub fn invalid_tuple_index(index: usize, max_index: usize, span: Span) -> Self {
@@ -122,7 +385,7 @@ impl HIRError {
     }
     ///Creates a new `InvalidStyleDefinition` error, where the name of the style definition is the given `name` and the given `span` is
     ///the span on the code that generated so
-    pub fn invalid_tuple_target(target: HirType, span: Span) -> Self {
+    pub fn invalid_tuple_target(target: DedupPoolId<HirType>, span: Span) -> Self {
         Self {
             kind: HIRErrorKind::InvalidTupleAccessTarget { ty: target },
             span,
@@ -145,7 +408,7 @@ impl HIRError {
     }
 
     /// Creates a [`HIRErrorKind::RecursiveType`] error for the given type symbol.
-    pub fn recursive(ty: SymbolPointer, span: Span) -> Self {
+    pub fn recursive(ty: DedupPoolId<HirType>, span: Span) -> Self {
         Self {
             kind: HIRErrorKind::RecursiveType { ty },
             span,
@@ -172,6 +435,27 @@ impl HIRError {
             span,
         }
     }
+    /// Creates a [`HIRErrorKind::InvalidFieldAccessTarget`] for accessing a non-struct type as a struct.
+    pub fn not_a_struct(ty: DedupPoolId<HirType>, span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::InvalidFieldAccessTarget { ty },
+            span,
+        }
+    }
+    /// Creates a [`HIRErrorKind::InvalidFieldAccessTarget`] for accessing a non-struct type as a struct.
+    pub fn not_a_component(name: SymbolPointer, span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::NotAComponent(name),
+            span,
+        }
+    }
+    /// Creates a [`HIRErrorKind::InvalidTupleAccessTarget`] for accessing a non-tuple type as a tuple.
+    pub fn not_a_tuple(ty: DedupPoolId<HirType>, span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::InvalidTupleAccessTarget { ty },
+            span,
+        }
+    }
     /// Creates a [`HIRErrorKind::InvalidType`] error for the given type symbol and reason.
     pub fn invalid_type(name: SymbolPointer, reason: InvalidTypeReason, span: Span) -> Self {
         Self {
@@ -187,9 +471,16 @@ impl HIRError {
         }
     }
     /// Creates a [`HIRErrorKind::PropertyNotRecognized`] error listing the unrecognized property names.
-    pub fn property_unrecognized(names: Vec<SymbolPointer>, span: Span) -> Self {
+    pub fn property_unrecognized(
+        ty: DedupPoolId<HirType>,
+        names: Vec<SymbolPointer>,
+        span: Span,
+    ) -> Self {
         Self {
-            kind: HIRErrorKind::PropertyNotRecognized { prop_names: names },
+            kind: HIRErrorKind::PropertyNotRecognized {
+                prop_names: names,
+                ty,
+            },
             span,
         }
     }
@@ -223,11 +514,146 @@ impl HIRError {
             span,
         }
     }
+    /// Creates a [`HIRErrorKind::IntrinsicNotRegistered`] error for the given intrinsic name.
+    pub fn intrinsic_not_registered(name: SymbolPointer, span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::IntrinsicNotRegistered { name },
+            span,
+        }
+    }
+    /// Creates a [`HIRErrorKind::CyclicComponentSignature`] error.
+    pub fn cyclic_component_signature(
+        component: SymbolPointer,
+        chain: Vec<ComponentKey>,
+        span: Span,
+    ) -> Self {
+        Self {
+            kind: HIRErrorKind::CyclicComponentSignature { component, chain },
+            span,
+        }
+    }
+
+    /// Creates a [`HIRErrorKind::CyclicComponentBody`] error.
+    pub fn cyclic_component_body(component: ComponentId, span: Span) -> Self {
+        Self {
+            kind: HIRErrorKind::CyclicComponentBody { component },
+            span,
+        }
+    }
+
+    /// Creates a [`HIRErrorKind::GenericArityMismatch`] error.
+    pub fn generic_arity_mismatch(
+        func: SymbolPointer,
+        declared: usize,
+        supplied: usize,
+        span: Span,
+    ) -> Self {
+        Self {
+            kind: HIRErrorKind::GenericArityMismatch {
+                func,
+                declared,
+                supplied,
+            },
+            span,
+        }
+    }
+
+    /// Creates a [`HIRErrorKind::CyclicMonomorphization`] error.
+    pub fn cyclic_monomorphization(
+        func: SymbolPointer,
+        args: Vec<DedupPoolId<HirType>>,
+        span: Span,
+    ) -> Self {
+        Self {
+            kind: HIRErrorKind::CyclicMonomorphization { func, args },
+            span,
+        }
+    }
+
+    /// Creates a [`HIRErrorKind::AmbiguousDeclaration`] error.
+    pub fn ambiguous_declaration(
+        name: SymbolPointer,
+        first: FileId,
+        second: FileId,
+        span: Span,
+    ) -> Self {
+        Self {
+            kind: HIRErrorKind::AmbiguousDeclaration {
+                name,
+                first,
+                second,
+            },
+            span,
+        }
+    }
 }
 
 impl std::fmt::Display for HIRError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.kind {
+            HIRErrorKind::InvalidEnumUsage(_) => write!(f, "Invalid enum usage"),
+            HIRErrorKind::MethodNotFound(_) => {
+                write!(f, "Method not found")
+            }
+            HIRErrorKind::StaticMethodNotFound(_) => {
+                write!(f, "Static method not found")
+            }
+            HIRErrorKind::InvalidTypeAccess => write!(f, "Invalid type access"),
+            HIRErrorKind::ExpressionNotMutable(_) => write!(f, "Expression not mutable"),
+            HIRErrorKind::InvalidDeref => write!(f, "Invalid deref"),
+            HIRErrorKind::ArrayLengthMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "Array length mismatch: expected {}, got {}",
+                    expected, actual
+                )
+            }
+            HIRErrorKind::MissingReturn => write!(
+                f,
+                "This function does not return at all, even though it should"
+            ),
+            HIRErrorKind::EnumVariantNotAnInt(_) => {
+                write!(f, "Valued enum variants must have an integer literal value")
+            }
+            HIRErrorKind::MatchesOnNonEnum(_) => write!(
+                f,
+                "The left-hand side of a `matches` expression must be an enum value"
+            ),
+            HIRErrorKind::InvalidPattern => write!(
+                f,
+                "The right-hand side of a `matches` expression must be a variant name (`Foo`) or a variant call (`Foo(...)`)"
+            ),
+            HIRErrorKind::VariantNotRecognized(_) => {
+                write!(f, "No reachable enum declares a variant with this name")
+            }
+            HIRErrorKind::InvalidEnumRepresentation(_) => write!(
+                f,
+                "Only `int` is supported as an enum representation; raw enums must use `repr: int`"
+            ),
+            HIRErrorKind::UnexpectedType { .. } => {
+                write!(f, "Received mismatched types")
+            }
+            HIRErrorKind::InvalidIndexing(_) => write!(
+                f,
+                "The given expression cannot be indexed because it is not an array nor vector"
+            ),
+            HIRErrorKind::CouldntInfer => write!(f, "Expression type couldn't be infered"),
+            HIRErrorKind::ComponentNotFound(_) => write!(f, "Component not found"),
+            HIRErrorKind::NotAComponent(_) => write!(f, "Atempt to use value as a component"),
+            HIRErrorKind::ComponentPropertyMissingType => {
+                write!(f, "Component property is missing type definition")
+            }
+
+            HIRErrorKind::InvalidWrite(InvalidWriteReason::ImmutableVariable(_)) => {
+                write!(f, "Atempt to write on a imutable variable")
+            }
+            HIRErrorKind::InvalidWrite(InvalidWriteReason::ExpressionNotAssignable) => {
+                write!(f, "The expression is not assignable")
+            }
+            HIRErrorKind::InvalidWrite(InvalidWriteReason::ReferenceImmutable) => {
+                write!(f, "Reference being written is immutable")
+            }
+            HIRErrorKind::InvalidFieldAccess => write!(f, "Invalid field access"),
             HIRErrorKind::TypeNotRecognized(_) => write!(f, "Type not recognized"),
             HIRErrorKind::NameNotRecognized(_) => write!(f, "Name not recognized"),
             HIRErrorKind::NameAlreadyDefined(_) => write!(f, "Name already defined"),
@@ -262,6 +688,56 @@ impl std::fmt::Display for HIRError {
             HIRErrorKind::InvalidStyleDefinition { .. } => {
                 write!(f, "Invalid style definition name")
             }
+            HIRErrorKind::AmbiguousDeclaration {
+                name: _,
+                first,
+                second,
+            } => {
+                write!(
+                    f,
+                    "Ambiguous declaration found in files {:?} and {:?}",
+                    first, second
+                )
+            }
+            HIRErrorKind::IntrinsicNotRegistered { name } => {
+                write!(
+                    f,
+                    "intrinsic '{:?}' is not defined — ensure the standard library is loaded",
+                    name
+                )
+            }
+            HIRErrorKind::CyclicComponentSignature {
+                component: _,
+                chain,
+            } => {
+                write!(f, "cyclic component signature: ")?;
+                for (i, (_, name)) in chain.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, " → ")?;
+                    }
+                    write!(f, "{:?}", name)?;
+                }
+                Ok(())
+            }
+            HIRErrorKind::CyclicComponentBody { component: _ } => {
+                write!(f, "cyclic component body resolution")
+            }
+            HIRErrorKind::GenericArityMismatch {
+                func,
+                declared,
+                supplied,
+            } => {
+                write!(
+                    f,
+                    "generic function '{func:?}' expects {declared} type argument(s), got {supplied}"
+                )
+            }
+            HIRErrorKind::CyclicMonomorphization { func, .. } => {
+                write!(
+                    f,
+                    "monomorphization of generic function '{func:?}' does not terminate"
+                )
+            }
         }
     }
 }
@@ -274,13 +750,16 @@ pub enum InvalidTypeReason {
     MissingGeneric,
     /// The type is being used in a context where it is not valid.
     IncorrectUsage,
+    /// The type could not be inferred from context (e.g. variable without initializer and no type annotation).
+    CouldntInfer,
 }
 
 impl std::fmt::Display for InvalidTypeReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             InvalidTypeReason::MissingGeneric => write!(f, "missing generic type"),
-            InvalidTypeReason::IncorrectUsage => write!(f, "is being used incorrectly"),
+            InvalidTypeReason::IncorrectUsage => write!(f, "being used incorrectly"),
+            InvalidTypeReason::CouldntInfer => write!(f, "could not infer type"),
         }
     }
 }

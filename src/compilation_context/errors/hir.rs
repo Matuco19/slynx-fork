@@ -1,6 +1,7 @@
 use slynx_hir::{
     SlynxHir,
-    error::{HIRError, HIRErrorKind},
+    error::{HIRError, HIRErrorKind, InvalidWriteReason, NotMutableReason},
+    ownership::{OwnershipError, OwnershipErrorKind},
 };
 
 use crate::{
@@ -11,6 +12,102 @@ use crate::{
 impl SlynxContext {
     fn hir_error_to_string(&self, hir: &SlynxHir, err: &HIRError) -> String {
         match &err.kind {
+            HIRErrorKind::InvalidEnumUsage(ty) => {
+                format!("Type '{}' is being used as an enum, even though it isnt", hir.view(*ty).name())
+            }
+            HIRErrorKind::MethodNotFound(name) => {
+                format!(
+                    "Method '{}' could not be found on the given struct",
+                    hir.get_name(*name)
+                )
+            }
+            HIRErrorKind::StaticMethodNotFound(name) => {
+                format!("Static method not found: {}", hir.get_name(*name))
+            }
+            HIRErrorKind::InvalidTypeAccess => "Invalid type access".to_string(),
+            HIRErrorKind::ExpressionNotMutable(NotMutableReason::ExpressionNotAssignable) => {
+                "Expression cannot be mutable".to_string()
+            }
+            HIRErrorKind::ExpressionNotMutable(NotMutableReason::ImmutableVariable(variable)) => {
+                format!(
+                    "Variable '{}' is immutable and cannot be mutated",
+                    hir.get_name(*variable)
+                )
+            }
+            HIRErrorKind::InvalidDeref => {
+                "Invalid deref, value being dereferenced is not a reference(mutable or imutable)"
+                    .to_string()
+            }
+            HIRErrorKind::ArrayLengthMismatch { expected, actual } => {
+                format!(
+                    "Array length mismatch: expected {}, got {}",
+                    expected, actual
+                )
+            }
+            HIRErrorKind::MissingReturn => {
+                "Function does not contain return, but its return type is NOT void".to_string()
+            }
+            HIRErrorKind::EnumVariantNotAnInt(name) => {
+                format!(
+                    "Valued enum variant '{}' must have an integer literal value",
+                    hir.get_name(*name)
+                )
+            }
+            HIRErrorKind::MatchesOnNonEnum(ty) => {
+                format!(
+                    "Cannot match on '{}': the `matches` operator requires an enum value on its left-hand side",
+                    hir.view(*ty).name()
+                )
+            }
+            HIRErrorKind::InvalidPattern => "Invalid `matches` pattern. Expected a variant name (`Foo`) or a variant call (`Foo(...)`)".to_string(),
+            HIRErrorKind::VariantNotRecognized(name) => {
+                format!(
+                    "Variant '{}' not recognized: no reachable enum declares a variant with this name",
+                    hir.get_name(*name)
+                )
+            }
+            HIRErrorKind::InvalidEnumRepresentation(name) => {
+                format!(
+                    "Enum '{}' uses an unsupported representation: only `int` is supported",
+                    hir.get_name(*name)
+                )
+            }
+            HIRErrorKind::UnexpectedType { expected, received } => {
+                let expected_name = hir.view(*expected).name();
+                let received_name = hir.view(*received).name();
+                format!(
+                    "Received an incorrect type. Expected {expected_name} instead, received type {received_name}"
+                )
+            }
+            HIRErrorKind::InvalidIndexing(ty) => {
+                format!(
+                    "Expression cannot be indexed. Type is '{}', instead expected an array/vector type.",
+                    hir.view(*ty).name()
+                )
+            }
+            HIRErrorKind::CouldntInfer => "Could not infer the type of expression".to_string(),
+            HIRErrorKind::ComponentNotFound(name) => format!(
+                "Component named as '{}' could not be found",
+                hir.get_name(*name)
+            ),
+            HIRErrorKind::NotAComponent(name) => {
+                let name = hir.get_name(*name);
+                format!("'{name}' is not a component")
+            }
+            HIRErrorKind::ComponentPropertyMissingType => {
+                "Component property is missing type definition".to_string()
+            }
+            HIRErrorKind::InvalidWrite(InvalidWriteReason::ExpressionNotAssignable) => {
+                "Expression is not assignable".to_string()
+            }
+            HIRErrorKind::InvalidWrite(InvalidWriteReason::ImmutableVariable(v)) => format!(
+                "Invalid write to '{}' variable, which is immutable.",
+                hir.get_name(*v)
+            ),
+            HIRErrorKind::InvalidWrite(InvalidWriteReason::ReferenceImmutable) => {
+                "Reference being written is immutable".to_string()
+            }
+            HIRErrorKind::InvalidFieldAccess => "Invalid field access".to_string(),
             HIRErrorKind::InvalidFuncallArgLength {
                 func_name,
                 expected_length,
@@ -35,13 +132,15 @@ impl SlynxContext {
             }
             HIRErrorKind::TypeNotRecognized(name) => {
                 let name = hir.get_name(*name);
-                format!("Type with name '{name}' is was not defined previously")
+                format!("Type with name '{name}' was not defined")
             }
             HIRErrorKind::InvalidFieldAccessTarget { ty } => {
-                format!("Type '{ty:?}' does not support field-style access")
+                let ty = hir.view(*ty).name();
+                format!("Type '{ty}' does not support field-style access")
             }
             HIRErrorKind::InvalidTupleAccessTarget { ty } => {
-                format!("Type '{ty:?}' does not support tuple-style access")
+                let ty = hir.view(*ty).name();
+                format!("Type '{ty}' does not support tuple-style access")
             }
             HIRErrorKind::InvalidTupleIndex { index, length } => {
                 format!(
@@ -65,24 +164,36 @@ impl SlynxContext {
                 format!("The name '{name}' was already defined before. Use a different name")
             }
             HIRErrorKind::MissingProperty { prop_names } => {
+                let property = if prop_names.len() == 1 {
+                    "Property"
+                } else {
+                    "Properties"
+                };
                 let names = prop_names
                     .iter()
-                    .map(|v| hir.get_name(*v))
-                    .collect::<Vec<&str>>()
-                    .join(", ");
-                format!("Property(ies) named as {names} is required but wasn't provided")
-            }
-            HIRErrorKind::PropertyNotRecognized { prop_names } => {
-                let names = prop_names
-                    .iter()
-                    .map(|v| hir.get_name(*v))
+                    .map(|v| format!("'{}'", hir.get_name(*v)))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("Property(ies) named as {names} are not recognized for this object")
+                format!("{property} {names} is required but wasn't provided")
+            }
+            HIRErrorKind::PropertyNotRecognized { prop_names, ty } => {
+                let property = if prop_names.len() == 1 {
+                    "Property"
+                } else {
+                    "Properties"
+                };
+                let objname = hir.view(*ty).name();
+                let names = prop_names
+                    .iter()
+                    .map(|v| format!("'{}'", hir.get_name(*v)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                format!("{property} {names} are not recognized for object {objname}",)
             }
             HIRErrorKind::RecursiveType { ty } => {
-                let ty = hir.get_name(*ty);
-                format!("The type named as '{ty}' is recursive at this point")
+                let name = hir.view(*ty).name();
+                format!("The type named as '{name}' is recursive at this point")
             }
             HIRErrorKind::InvalidStyleEvent { name } => {
                 let name = hir.get_name(*name);
@@ -91,6 +202,46 @@ impl SlynxContext {
             HIRErrorKind::InvalidStyleDefinition { name } => {
                 let name = hir.get_name(*name);
                 format!("Invalid style definition '{name}'")
+            }
+            HIRErrorKind::AmbiguousDeclaration {
+                name,
+                first,
+                second,
+            } => {
+                let name = hir.get_name(*name);
+                format!(
+                    "The name '{name}' is ambiguous: it was found in files {first:?} and {second:?}",
+                )
+            }
+            HIRErrorKind::IntrinsicNotRegistered { name } => {
+                let name = hir.get_name(*name);
+                format!("intrinsic '{name}' is not defined — ensure the standard library is loaded")
+            }
+            HIRErrorKind::CyclicComponentSignature { component, chain } => {
+                let comp_name = hir.get_name(*component);
+                let chain_str = chain
+                    .iter()
+                    .map(|(_, n)| hir.get_name(*n))
+                    .collect::<Vec<_>>()
+                    .join(" → ");
+                format!("cyclic component signature: component '{comp_name}' at chain: {chain_str}")
+            }
+            HIRErrorKind::CyclicComponentBody { component: _ } => {
+                "cyclic component body resolution".to_string()
+            }
+            HIRErrorKind::GenericArityMismatch {
+                func,
+                declared,
+                supplied,
+            } => {
+                let func = hir.get_name(*func);
+                format!(
+                    "Generic function '{func}' expects {declared} type argument(s), got {supplied}"
+                )
+            }
+            HIRErrorKind::CyclicMonomorphization { func, .. } => {
+                let func = hir.get_name(*func);
+                format!("Monomorphization of generic function '{func}' does not terminate")
             }
         }
     }
@@ -102,7 +253,7 @@ impl SlynxContext {
             column_start,
             column_end,
             src,
-        } = self.get_line_info(&self.entry_point, error.span.start);
+        } = self.get_line_info(&self.entry_point, error.span.start as usize);
         SlynxError::new_hir(
             line,
             column_start,
@@ -111,6 +262,57 @@ impl SlynxContext {
             self.file_name(),
             src.to_string(),
             suggestion,
+        )
+    }
+
+    pub fn handle_ownership_error(&self, hir: &SlynxHir, error: &OwnershipError) -> SlynxError {
+        let message = match &error.kind {
+            OwnershipErrorKind::UseAfterMove { variable } => {
+                format!(
+                    "Variable '{}' is used after it was moved",
+                    hir.get_variable_name(*variable)
+                )
+            }
+            OwnershipErrorKind::ConflictingBorrow {
+                variable,
+                existing_borrow,
+                new_borrow,
+            } => {
+                format!(
+                    "Cannot borrow variable '{}' as {} because it is already {}",
+                    hir.get_variable_name(*variable),
+                    new_borrow,
+                    existing_borrow
+                )
+            }
+            OwnershipErrorKind::MoveWhileBorrowed { variable } => {
+                format!(
+                    "Cannot move variable '{}' because it is currently borrowed",
+                    hir.get_variable_name(*variable)
+                )
+            }
+            OwnershipErrorKind::MutablyBorrowImmutable { variable } => {
+                format!(
+                    "Cannot borrow variable '{}' as mutable because it is immutable",
+                    hir.get_variable_name(*variable)
+                )
+            }
+        };
+
+        let LineInfo {
+            line,
+            column_start,
+            column_end,
+            src,
+        } = self.get_line_info(&self.entry_point, error.span.start as usize);
+        SlynxError::new_hir(
+            line,
+            column_start,
+            column_end,
+            message,
+            self.file_name(),
+            src.to_string(),
+            vec![],
         )
     }
 }

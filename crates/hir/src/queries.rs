@@ -1,58 +1,128 @@
-use common::Span;
+use std::ops::Deref;
 
-use crate::{DeclarationId, HIRError, HirType, Result, SlynxHir, SymbolPointer, TypeId};
+use common::{
+    Span,
+    pool::{DedupPoolId, PoolId},
+};
+use dashmap::mapref::one::{Ref, RefMut};
+use module_loader::FileId;
 
-impl SlynxHir {
-    ///Gets the HIR type of the given `ty`
-    pub fn get_type(&self, ty: &TypeId) -> &HirType {
-        self.modules.types_module.get_type(ty)
+use crate::{
+    DeclarationId, HIRError, HirComponentDeclaration, HirComponentExpression, HirExpression,
+    HirFunctionDeclaration, HirStatement, HirType, Result, SlynxHir, SymbolPointer, VariableId,
+    context::HirSymbol,
+    file::HirFile,
+    helpers::HirViewer,
+    id::{AnyDeclarationId, AnyLocalDeclarationId},
+};
+
+impl SlynxHir<'_> {
+    pub fn insert_expression(&self, expr: HirExpression) -> PoolId<HirExpression> {
+        self.expressions.insert(expr)
     }
-    ///Gets the HIR type of the given `ty`
-    pub fn get_type_mut(&mut self, ty: &TypeId) -> &mut HirType {
-        self.modules.types_module.get_type_mut(ty)
+    pub fn insert_statement(&self, stmt: HirStatement) -> PoolId<HirStatement> {
+        self.statements.insert(stmt)
+    }
+    pub fn insert_component_expression(
+        &self,
+        component: HirComponentExpression,
+    ) -> PoolId<HirComponentExpression> {
+        self.component_expressions.insert(component)
+    }
+    pub fn find_function_by_symbol(
+        &self,
+        symbol: HirSymbol,
+    ) -> Option<DeclarationId<HirFunctionDeclaration>> {
+        self.symbols_registry.get_function(symbol)
+    }
+
+    pub fn find_component_by_symbol(
+        &self,
+        symbol: HirSymbol,
+    ) -> Option<DeclarationId<HirComponentDeclaration>> {
+        self.symbols_registry.get_component(symbol)
+    }
+
+    pub fn intern_name(&self, name: &str) -> SymbolPointer {
+        self.symbols_resolver.intern(name)
     }
 
     pub fn get_name(&self, name: SymbolPointer) -> &str {
-        self.modules.symbols_resolver.get_name(name)
+        self.symbols_resolver.get_name(name)
     }
 
-    pub fn get_declaration_name(&self, id: DeclarationId) -> &str {
-        let ty = self.modules.declarations_module.get_declaration_type(id);
+    pub fn get_variable_name(&self, id: VariableId) -> &str {
         let ptr = self
-            .modules
-            .types_module
-            .get_type_name(&ty)
-            .expect("Declaration should contain a name");
-        self.get_name(*ptr)
+            .variable_names
+            .get(&id)
+            .expect("Variable name should be registered during HIR construction");
+        self.symbols_resolver.get_name(*ptr)
     }
-    ///Retrieves the type of something by asserting the provided `ref_ty` is a reference type to it
-    pub fn get_type_from_ref(&self, ref_ty: TypeId, span: &Span) -> Result<&HirType> {
-        let ty = self.modules.types_module.get_type_from_ref(ref_ty, span)?;
-        Ok(self.get_type(&ty))
+
+    pub fn get_file(&self, id: FileId) -> Ref<'_, FileId, HirFile> {
+        self.files
+            .get(&id)
+            .expect("A file with the given id should exist")
     }
-    /// Resolves the [`TypeId`] for the given plain type name string.
-    ///
-    /// Handles built-in names (`int`, `float`, `str`, `bool`, `void`, `Component`) directly,
-    /// and falls back to the module's type registry for user-defined types.
-    pub fn get_type_of_name(&self, name: SymbolPointer, span: &Span) -> Result<TypeId> {
-        let name_ref = self.get_name(name);
-        match name_ref {
-            "Component" => Ok(self.component_type()),
-            "()" | "void" => Ok(self.void_type()),
-            "bool" => Ok(self.bool_type()),
-            "int" => Ok(self.int32_type()),
-            "float" => Ok(self.float32_type()),
-            "str" => Ok(self.str_type()),
-            _ => self
-                .modules
-                .types_module
-                .get_id(&name)
-                .cloned()
-                .ok_or(HIRError::type_unrecognized(name, *span)),
+    pub fn get_file_mut(&self, id: FileId) -> RefMut<'_, FileId, HirFile> {
+        self.files
+            .get_mut(&id)
+            .expect("A file with the given id should exist")
+    }
+    pub fn get_declaration_type(&self, id: AnyDeclarationId) -> DedupPoolId<HirType> {
+        let file = self.get_or_create_file(id.file_id);
+        match id.local_id {
+            AnyLocalDeclarationId::Alias(alias) => file.alias.get(alias).ty,
+            AnyLocalDeclarationId::Component(component) => file.components.get(component).ty,
+            AnyLocalDeclarationId::Function(func) => file.functions.get(func).ty,
+            AnyLocalDeclarationId::Object(obj) => file.objects.get(obj).ty,
+            AnyLocalDeclarationId::Static(statik) => file.statik.get(statik).ty,
+            AnyLocalDeclarationId::Style(style) => file.styles.get(style).ty,
+            AnyLocalDeclarationId::Enum(enun) => file.enums.get(enun).ty,
         }
     }
 
-    pub fn get_name_of_type(&self, ty: TypeId) -> Option<SymbolPointer> {
-        self.modules.types_module.get_type_name(&ty).cloned()
+    pub fn get_declaration_generics(&self, id: AnyDeclarationId) -> Vec<SymbolPointer> {
+        let file = self.get_or_create_file(id.file_id);
+        match id.local_id {
+            AnyLocalDeclarationId::Alias(alias) => &file.alias.get(alias).generics,
+            AnyLocalDeclarationId::Component(component) => &file.components.get(component).generics,
+            AnyLocalDeclarationId::Function(func) => &file.functions.get(func).generics,
+            AnyLocalDeclarationId::Object(obj) => &file.objects.get(obj).generics,
+            AnyLocalDeclarationId::Style(style) => &file.styles.get(style).generics,
+            AnyLocalDeclarationId::Enum(enun) => &file.enums.get(enun).generics,
+            AnyLocalDeclarationId::Static(_) => {
+                unreachable!("An static should not contain generics")
+            }
+        }
+        .to_vec()
+    }
+
+    pub fn type_of_intrinsic(&self, name: &str, span: Span) -> Result<DedupPoolId<HirType>> {
+        let id = self.lang_items.get(name).map_err(|_| {
+            let sym = self.intern_name(name);
+            HIRError::intrinsic_not_registered(sym, span)
+        })?;
+        Ok(self.get_declaration_type(id))
+    }
+
+    /// Recursively flattens a HIR type to its primitive components.
+    /// A struct `Color { inner: int }` flattens to `[int]`.
+    /// A struct `Border { color: Color, width: int, radius: int }` flattens to `[int, int, int]`.
+    pub fn flatten_type(&self, ty: DedupPoolId<HirType>) -> Vec<DedupPoolId<HirType>> {
+        match &self.deref()[ty] {
+            HirType::Int | HirType::Float | HirType::Bool | HirType::Str => vec![ty],
+            HirType::Struct(strukt) => self
+                .view(*strukt)
+                .field_types()
+                .iter()
+                .flat_map(|f| self.flatten_type(*f))
+                .collect(),
+            HirType::Reference { rf, .. } => self.flatten_type(*rf),
+            _ => vec![ty],
+        }
+    }
+    pub fn view<T>(&self, data: T) -> HirViewer<'_, T> {
+        HirViewer { hir: self, data }
     }
 }

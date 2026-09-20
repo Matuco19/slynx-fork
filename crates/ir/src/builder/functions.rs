@@ -1,9 +1,9 @@
-use smallvec::smallvec;
+use smallvec::{SmallVec, smallvec};
 
 use crate::{
     Component, ComponentValueBuilder, Function, IRError, IRErrorDescription, IRErrorKind,
     IRPointer, IRStorage, IRType, IRTypeId, Instruction, Label, Opcode, Operand, SlynxIR,
-    StyleProperty, Value,
+    StyleProperty, SymbolPointer, Value,
 };
 
 // ── LabelBuilder (intermediate bookkeeping, dropped after generate()) ──────
@@ -74,6 +74,7 @@ impl<'a> FunctionBuilder<'a> {
         let IRType::Function(func_id) = self.ir.get_type(ty) else {
             unreachable!()
         };
+        let func_id = *func_id;
         let func_ty = self.ir.get_function_type_mut(func_id);
         func_ty.insert_arg_types(&args);
         func_ty.set_return_type(ret);
@@ -180,7 +181,8 @@ impl<'a> FunctionBuilder<'a> {
     /// Emit an instruction and return its resulting [`Value`].
     ///
     /// The returned `Value` numerically equals the instruction's index
-    /// in `SlynxIR.instructions`. Appends a new value on the current label if its an impure instruction
+    /// in `SlynxIR.instructions`. Appends a new value on the current label if its an impure instruction. Note that IF THE INSTRUCTION IS PURE, IT WILL NOT BE APPENDED TO THE LABEL, it will be appended into the IR, and might be
+    /// appended into the label IF AND ONLY IF, some impure instruction depends on this instruction.
     #[inline]
     pub fn emit(
         &mut self,
@@ -330,6 +332,16 @@ impl FunctionBuilder<'_> {
         let ty = self.value_type(value);
         self.emit(Opcode::Ret, smallvec![value], ty)
     }
+    ///Emits a copy instruction.
+    pub fn copy(&mut self, value: Value) -> Value {
+        let ty = self.value_type(value);
+        self.emit(Opcode::Copy, smallvec![value], ty)
+    }
+    ///Emits a move semantics instruction.
+    pub fn mov(&mut self, value: Value) -> Value {
+        let ty = self.value_type(value);
+        self.emit(Opcode::Move, smallvec![value], ty)
+    }
 
     pub fn allocate(&mut self, ty: IRTypeId) -> Value {
         self.emit(Opcode::Allocate, smallvec![], ty)
@@ -353,6 +365,42 @@ impl FunctionBuilder<'_> {
 
     pub fn set_field(&mut self, object: Value, index: u16, value: Value) -> Value {
         self.emit_void(Opcode::SetField(index), smallvec![object, value])
+    }
+    pub fn deref_write(&mut self, target: Value, value: Value) -> Value {
+        self.emit_void(Opcode::DerefWrite, smallvec![target, value])
+    }
+    pub fn field_ref(&mut self, value: Value, field_index: u16) -> Value {
+        let ty = self.value_type(value);
+        self.emit(
+            Opcode::FieldRef(field_index),
+            smallvec![value],
+            self.ir.insert_type(IRType::Pointer(ty)),
+        )
+    }
+    /// Dynamically get a field by name from an external object.
+    pub fn dyn_get_field(&mut self, object: Value, name: SymbolPointer) -> Value {
+        let ty = self.value_type(object);
+        self.emit(Opcode::DynGetField(name), smallvec![object], ty)
+    }
+
+    /// Dynamically set a field by name on an external object.
+    pub fn dyn_set_field(&mut self, object: Value, name: SymbolPointer, value: Value) -> Value {
+        self.emit_void(Opcode::DynSetField(name), smallvec![object, value])
+    }
+
+    /// Dynamically call a method by name on an external object.
+    /// Operands: `[object, arg0, arg1, ...]`.
+    pub fn dyn_method_call(
+        &mut self,
+        object: Value,
+        name: SymbolPointer,
+        args: &[Value],
+        return_type: IRTypeId,
+    ) -> Value {
+        let mut operands = SmallVec::with_capacity(1 + args.len());
+        operands.push(object);
+        operands.extend_from_slice(args);
+        self.emit(Opcode::DynMethodCall(name), operands, return_type)
     }
 
     pub fn struct_literal(&mut self, ty: IRTypeId, fields: &[Value]) -> Value {

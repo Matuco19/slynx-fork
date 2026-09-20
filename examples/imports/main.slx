@@ -1,0 +1,23 @@
+import styles;
+import utils.components using {Text, Div};
+import another using BgGreen as Bg;
+component Aba {
+	Text {
+		text: "Abababa"
+	}
+}
+
+component Teste {
+	Div {
+
+		Text {
+
+			text: "Jorge"
+		}
+	}
+	Aba {}
+}
+
+func main(): Component {
+	Teste {}
+}

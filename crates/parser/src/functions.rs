@@ -1,35 +1,18 @@
-use crate::{Parser, Result, error::ParseError};
-use slynx_lexer::tokens::{Token, TokenKind};
+use crate::{ASTAttribute, SymbolPointer};
+use crate::{
+    ExpectedContent, FuncDeclaration, Parser, Result, TypeParamScope, error::ParseError,
+    flags::ParserFlag,
+};
+use slynx_lexer::tokens::TokenKind;
 
-use crate::ast::{ASTDeclaration, ASTDeclarationKind, ASTStatement, ASTStatementKind, TypedName};
-use common::Span;
-impl Parser {
-    ///Parses a typed name. A typed name is `name: type`, which is a name that contains a type
-    pub fn parse_typedname(&mut self) -> Result<TypedName> {
-        let Token {
-            kind: TokenKind::Identifier(name),
-            span,
-        } = self.expect(&TokenKind::Identifier(String::new()))?
-        else {
-            unreachable!();
-        };
-        self.expect(&TokenKind::Colon)?;
-        let ty = self.parse_type()?;
-        Ok(TypedName {
-            name,
-            span: Span {
-                start: span.start,
-                end: ty.span.end,
-            },
-            kind: ty,
-        })
-    }
-
+use crate::ast::{ASTStatement, TypedName};
+use common::{Span, Spanned};
+impl Parser<'_> {
     ///Parses the arguments of a function. It parses until the `)` of the function args.
-    pub fn parse_args(&mut self) -> Result<Vec<TypedName>> {
+    pub fn parse_args(&mut self, type_params: TypeParamScope) -> Result<Vec<Spanned<TypedName>>> {
         let mut names = Vec::new();
         while !matches!(self.peek()?.kind, TokenKind::RParen) {
-            names.push(self.parse_typedname()?);
+            names.push(self.parse_typedname(type_params)?);
             if matches!(self.peek()?.kind, TokenKind::RParen) {
                 break;
             } else {
@@ -42,39 +25,82 @@ impl Parser {
 
     ///Parses a function. The provided `span` is the initial span for the 'func' keyword.
     ///Parses both `func main(arg1:T): Q {...}` and `func main(arg1:T): Q -> ...`
-    pub fn parse_func(&mut self, span: Span) -> Result<ASTDeclaration> {
-        let name = self.parse_type()?;
+    pub fn parse_func(
+        &mut self,
+        span: Span,
+        attributes: Vec<Spanned<ASTAttribute>>,
+    ) -> Result<FuncDeclaration> {
+        let (name, generics) = self.parse_generic_name()?;
+        self.parse_func_rest(span, name, generics, attributes)
+    }
+
+    ///Parses everything that comes after the function name: the arguments, the
+    ///return type and the body. The type parameters are kept in scope while this
+    ///runs, so `T` in argument/return types resolves to [`Type::Generic`].
+    fn parse_func_rest(
+        &mut self,
+        span: Span,
+        name: SymbolPointer,
+        type_params: Vec<SymbolPointer>,
+        attributes: Vec<Spanned<ASTAttribute>>,
+    ) -> Result<FuncDeclaration> {
         self.expect(&TokenKind::LParen)?;
-        let args = self.parse_args()?;
+        let args = self.parse_args(&type_params)?;
         self.expect(&TokenKind::RParen)?;
         self.expect(&TokenKind::Colon)?;
-        let return_type = self.parse_type()?;
+        let return_type = self.parse_type(&type_params)?;
+        if self.flags.has_flag(ParserFlag::OnlySignatures) {
+            self.expect(&TokenKind::SemiColon).map_err(|e| {
+                let ParseError::UnexpectedToken(tk, _) = e else {
+                    unreachable!()
+                };
+                ParseError::UnexpectedToken(
+                    tk,
+                    ExpectedContent::ParsingContext(crate::ParserContext::OnlySignatures),
+                )
+            })?;
+            return Ok(FuncDeclaration {
+                attributes,
+                visibility: Default::default(),
+                span: span.merge_with(return_type.span),
+                external: false,
+                name,
+                type_params,
+                args,
+                return_type,
+                body: vec![],
+            });
+        }
         let current = self.eat()?;
+
         //func main(arg:T):Q ->/{}
         match current.kind {
             TokenKind::Arrow => {
-                let expr = self.parse_expression()?;
-                let end = self.expect(&TokenKind::SemiColon)?.span.end;
-                Ok(ASTDeclaration {
-                    span: Span {
-                        start: span.start,
-                        end,
-                    },
-                    kind: ASTDeclarationKind::FuncDeclaration {
-                        name,
-                        args,
-                        return_type,
-                        body: vec![ASTStatement {
-                            span: expr.span,
-                            kind: ASTStatementKind::Expression(expr),
-                        }],
-                    },
+                let expr = self.parse_expression(&type_params)?;
+                let end = expr
+                    .span
+                    .merge_with(self.expect(&TokenKind::SemiColon)?.span);
+                let body = vec![Spanned::new(
+                    self.intern_statment(ASTStatement::Expression(expr)),
+                    end,
+                )];
+                Ok(FuncDeclaration {
+                    attributes: vec![],
+                    visibility: Default::default(),
+                    span: span.merge_with(end),
+                    name,
+                    type_params,
+                    args,
+                    return_type,
+                    body,
+                    external: false,
                 })
             }
             TokenKind::LBrace => {
-                let mut body = Vec::new();
+                self.reset_flags();
+                let mut body = vec![];
                 while !matches!(self.peek()?.kind, TokenKind::RBrace) {
-                    let stmt = self.parse_statement()?;
+                    let stmt = self.parse_statement(&type_params)?;
                     body.push(stmt);
 
                     if self.peek()?.kind == TokenKind::RBrace {
@@ -82,23 +108,25 @@ impl Parser {
                     }
                     self.finish_current_parse()?;
                 }
-                let end = self.expect(&TokenKind::RBrace)?.span.end;
-                Ok(ASTDeclaration {
-                    span: Span {
-                        start: span.start,
-                        end,
-                    },
-                    kind: ASTDeclarationKind::FuncDeclaration {
-                        name,
-                        args,
-                        return_type,
-                        body,
-                    },
+                let end = self.expect(&TokenKind::RBrace)?.span;
+                Ok(FuncDeclaration {
+                    attributes,
+                    visibility: Default::default(),
+                    external: false,
+                    span: span.merge_with(end),
+                    name,
+                    type_params,
+                    args,
+                    return_type,
+                    body,
                 })
             }
             _ => Err(ParseError::UnexpectedToken(
                 current,
-                "'->' or '{'".to_string(),
+                ExpectedContent::Raw(
+                    "Instead was expecting function body, which initializes with '->' or '{'"
+                        .to_string(),
+                ),
             )),
         }
     }

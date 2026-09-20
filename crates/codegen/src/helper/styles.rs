@@ -1,12 +1,13 @@
 use std::collections::HashSet;
 
+use common::pool::DedupPoolId;
 use slynx_hir::{
-    HirDeclaration, HirDeclarationKind, HirStyleBlockKind, HirStyleStatement, HirStyleUsage,
-    SlynxHir, StylesDefinition,
+    DeclarationId, HirStyleBlockKind, HirStyleStatement, HirStyleUsage, HirStylesheetDeclaration,
+    HirType, SlynxHir, StylesDefinition,
 };
 use slynx_ir::{Function, IRPointer, IRType, IRTypeId, SlynxIR, StyleProperty, Value};
 
-use crate::{Codegen, CodegenError};
+use crate::{Codegen, CodegenError, TypeId, functions::FunctionContext};
 
 pub struct StyleData {
     pub init_func: IRPointer<Function, 1>,
@@ -19,6 +20,7 @@ pub struct StyleData {
 pub(crate) struct ResolvedProperty<'a> {
     pub property: StyleProperty,
     pub source: PropertySource<'a>,
+    pub hir_type: TypeId,
 }
 
 #[derive(Clone)]
@@ -48,34 +50,41 @@ impl Codegen {
         props
     }
 
+    fn compute_property_prim_counts(
+        &self,
+        properties: &[ResolvedProperty],
+        hir: &SlynxHir,
+    ) -> Vec<usize> {
+        properties
+            .iter()
+            .map(|rp| hir.flatten_type(rp.hir_type).len())
+            .collect()
+    }
+
     pub(crate) fn lower_stylesheet(
         &mut self,
-        decl: &HirDeclaration,
+        id: DeclarationId<HirStylesheetDeclaration>,
+        decl: &HirStylesheetDeclaration,
         hir: &SlynxHir,
         ir: &mut SlynxIR,
     ) -> Result<(), CodegenError> {
-        let HirDeclarationKind::StyleSheet {
-            ref statements,
-            ref usages,
-            ..
-        } = decl.kind
-        else {
-            unreachable!("lower_stylesheet called on non-stylesheet declaration");
-        };
+        let HirStylesheetDeclaration {
+            statements, usages, ..
+        } = &decl;
 
         let own_props = self.collect_style_properties(statements);
         let resolved = self.resolve_style_inheritance(usages, &own_props, hir);
 
+        let style_data = self.styles.get_mut(&id).unwrap();
+        style_data.property_codes = resolved.iter().map(|rp| rp.property).collect();
+
         let struct_ty = self
             .get_mapped_type(&decl.ty)
             .ok_or(CodegenError::IRTypeNotRecognized(decl.ty))?;
-        self.populate_style_struct_fields(struct_ty, &resolved, ir)?;
+        self.populate_style_struct_fields(struct_ty, &resolved, hir, ir)?;
 
-        let style_data = self.styles.get_mut(&decl.id).unwrap();
-        style_data.property_codes = resolved.iter().map(|rp| rp.property).collect();
-
-        self.create_style_constructor(decl, struct_ty, usages, &resolved, hir, ir)?;
-        self.create_style_apply_function(decl, struct_ty, &resolved, ir)?;
+        self.create_style_constructor(id, decl, struct_ty, usages, &resolved, hir, ir)?;
+        self.create_style_apply_function(id, struct_ty, &resolved, hir, ir)?;
 
         Ok(())
     }
@@ -90,19 +99,21 @@ impl Codegen {
         let mut seen_codes: HashSet<StyleProperty> = HashSet::new();
 
         for (usage_idx, usage) in usages.iter().enumerate() {
-            let decl = &hir.declarations[usage.style.as_raw() as usize];
-            if let HirDeclarationKind::StyleSheet { ref statements, .. } = decl.kind {
-                let parent_props = self.collect_style_properties(statements);
-                for def in &parent_props {
-                    let name_str = hir.get_name(def.name);
-                    let property = StyleProperty::from_name(name_str);
-                    if !seen_codes.contains(&property) {
-                        seen_codes.insert(property);
-                        resolved.push(ResolvedProperty {
-                            property,
-                            source: PropertySource::Inherited(usage_idx),
-                        });
-                    }
+            let file = hir.get_file(usage.style.file_id);
+            let decl = &file[usage.style.local_id];
+            let HirStylesheetDeclaration { statements, .. } = decl;
+
+            let parent_props = self.collect_style_properties(statements);
+            for def in &parent_props {
+                let name_str = hir.get_name(def.name);
+                let property = StyleProperty::from_name(name_str);
+                if !seen_codes.contains(&property) {
+                    seen_codes.insert(property);
+                    resolved.push(ResolvedProperty {
+                        property,
+                        source: PropertySource::Inherited(usage_idx),
+                        hir_type: def.expected_type,
+                    });
                 }
             }
         }
@@ -114,12 +125,14 @@ impl Codegen {
                 resolved[pos] = ResolvedProperty {
                     property: code,
                     source: PropertySource::Own(def),
+                    hir_type: def.expected_type,
                 };
             } else {
                 seen_codes.insert(code);
                 resolved.push(ResolvedProperty {
                     property: code,
                     source: PropertySource::Own(def),
+                    hir_type: def.expected_type,
                 });
             }
         }
@@ -132,14 +145,15 @@ impl Codegen {
         &mut self,
         struct_ty: IRTypeId,
         properties: &[ResolvedProperty],
+        hir: &SlynxHir,
         ir: &mut SlynxIR,
     ) -> Result<(), CodegenError> {
         let field_types: Vec<IRTypeId> = properties
             .iter()
-            .map(|rp| rp.property.ir_type(ir))
-            .collect();
-
-        let IRType::Struct(id) = ir.get_type(struct_ty) else {
+            .flat_map(|rp| hir.flatten_type(rp.hir_type))
+            .map(|prim_ty| self.get_or_create_ir_type(&prim_ty, hir, ir))
+            .collect::<Result<Vec<_>, _>>()?;
+        let IRType::Struct(id) = *ir.get_type(struct_ty) else {
             unreachable!("Style struct type must be IRType::Struct");
         };
         let struct_obj = ir.get_object_type_mut(id);
@@ -149,28 +163,50 @@ impl Codegen {
         Ok(())
     }
 
+    fn flatten_struct_value(
+        &mut self,
+        value: Value,
+        ty: TypeId,
+        hir: &SlynxHir,
+        ctx: &mut FunctionContext,
+    ) -> Result<Vec<Value>, CodegenError> {
+        let view = hir.view(ty);
+        let mut map_types = |tys: &[DedupPoolId<HirType>]| {
+            let mut result = Vec::new();
+            for (i, field_ty) in tys.iter().enumerate() {
+                let field_val = ctx.get_field(value, i as u16);
+                result.extend(self.flatten_struct_value(field_val, *field_ty, hir, ctx)?);
+            }
+            Ok(result)
+        };
+        match view.raw() {
+            HirType::Int | HirType::Float | HirType::Bool | HirType::Str | HirType::Void => {
+                Ok(vec![value])
+            }
+            _ if let Some(s) = view.is_struct() => map_types(s.field_types()),
+            _ if let Some(t) = view.is_tuple() => map_types(t.fields()),
+            HirType::Reference { rf, .. } => self.flatten_struct_value(value, *rf, hir, ctx),
+            _ => Ok(vec![value]),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn create_style_constructor(
         &mut self,
-        decl: &HirDeclaration,
+        id: DeclarationId<HirStylesheetDeclaration>,
+        decl: &HirStylesheetDeclaration,
         struct_ty: IRTypeId,
         usages: &[HirStyleUsage],
         properties: &[ResolvedProperty],
         hir: &SlynxHir,
         ir: &mut SlynxIR,
     ) -> Result<(), CodegenError> {
-        let (decl_args, statements) = if let HirDeclarationKind::StyleSheet {
-            ref args,
-            ref statements,
-            ..
-        } = decl.kind
-        {
-            (args, statements)
-        } else {
-            unreachable!()
-        };
+        let HirStylesheetDeclaration {
+            args, statements, ..
+        } = &decl;
 
-        let hir_type_args = if let slynx_hir::HirType::Style { args } = hir.get_type(&decl.ty) {
-            args.clone()
+        let hir_type_args = if let Some(viewer) = hir.view(decl.ty).is_style() {
+            viewer.args().to_vec()
         } else {
             Vec::new()
         };
@@ -180,16 +216,16 @@ impl Codegen {
             .map(|a| self.get_or_create_ir_type(a, hir, ir))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let init_func = self.styles[&decl.id].init_func;
+        let init_func = self.styles[&id].init_func;
         let builder = ir.build_function(init_func);
         let mut ctx = crate::functions::FunctionContext::new(builder);
         let entry = ctx.create_label("entry");
         ctx.switch_to_block(entry).unwrap();
         ctx.set_function_type(arg_ir_types, struct_ty);
-        self.map_function_arguments(&mut ctx, decl_args);
+        self.map_function_arguments(&mut ctx, args);
         for statement in statements {
             if let HirStyleStatement::Statement(s) = statement {
-                self.lower_statement(s, hir, &mut ctx)?;
+                self.lower_statement(*s, hir, &mut ctx)?;
             }
         }
 
@@ -212,23 +248,17 @@ impl Codegen {
         }
 
         let mut field_values = Vec::new();
-        for resolved_prop in properties {
-            let value = match &resolved_prop.source {
-                PropertySource::Own(def) => self.lower_expression(&def.expr, hir, &mut ctx)?,
+        for rp in properties {
+            let value = match &rp.source {
+                PropertySource::Own(def) => self.lower_expression(def.expr, hir, &mut ctx)?,
                 PropertySource::Inherited(usage_idx) => {
-                    let (struct_val, _) = parent_structs[*usage_idx]
-                        .expect("Parent struct should have been computed");
-                    let parent_data = &self.styles[&usages[*usage_idx].style];
-                    let field_idx = parent_data
-                        .property_codes
-                        .iter()
-                        .position(|c| *c == resolved_prop.property)
-                        .expect("Property should exist in parent style struct");
-
-                    ctx.get_field(struct_val, field_idx as u16)
+                    parent_structs[*usage_idx]
+                        .expect("Parent struct should have been computed")
+                        .0
                 }
             };
-            field_values.push(value);
+            let primitives = self.flatten_struct_value(value, rp.hir_type, hir, &mut ctx)?;
+            field_values.extend(primitives);
         }
 
         let struct_val = ctx.struct_literal(struct_ty, &field_values);
@@ -239,14 +269,15 @@ impl Codegen {
 
     fn create_style_apply_function(
         &mut self,
-        decl: &HirDeclaration,
+        id: DeclarationId<HirStylesheetDeclaration>,
         struct_ty: IRTypeId,
         properties: &[ResolvedProperty],
+        hir: &SlynxHir,
         ir: &mut SlynxIR,
     ) -> Result<(), CodegenError> {
         let generic_component_ty = ir.generic_component_type();
         let void_ty = ir.void_type();
-        let apply_func = self.styles[&decl.id].apply_func;
+        let apply_func = self.styles[&id].apply_func;
         let builder = ir.build_function(apply_func);
         let mut ctx = crate::functions::FunctionContext::new(builder);
         let entry = ctx.create_label("entry");
@@ -258,9 +289,16 @@ impl Codegen {
         let comp_value = args[0];
         let struct_value = args[1];
 
-        for (field_idx, rp) in properties.iter().enumerate() {
-            let field_value = ctx.get_field(struct_value, field_idx as u16);
-            ctx.sapply(rp.property, &[comp_value, field_value]);
+        let prim_counts = self.compute_property_prim_counts(properties, hir);
+        let mut field_offset = 0usize;
+        for (rp, count) in properties.iter().zip(prim_counts.iter()) {
+            let mut sapply_args = vec![comp_value];
+            for i in 0..*count {
+                let prim_val = ctx.get_field(struct_value, (field_offset + i) as u16);
+                sapply_args.push(prim_val);
+            }
+            ctx.sapply(rp.property, &sapply_args);
+            field_offset += count;
         }
 
         ctx.ret(Value::VOID);

@@ -1,13 +1,15 @@
-use slynx_hir::{HirExpression, HirExpressionKind, HirStatement, HirStatementKind, SlynxHir};
-use slynx_ir::Value;
+use common::{Spanned, pool::PoolId};
+use slynx_hir::{HirExpression, HirExpressionKind, HirStatement, SlynxHir};
+use slynx_ir::{Opcode, Value};
+use smallvec::smallvec;
 
 use crate::{Codegen, CodegenError, functions::FunctionContext};
 
 impl Codegen {
     fn emit_while_statement<'a>(
         &mut self,
-        condition: &HirExpression,
-        body: &[HirStatement],
+        condition: &Spanned<PoolId<HirExpression>>,
+        body: &[Spanned<PoolId<HirStatement>>],
         hir: &SlynxHir,
         context: &mut FunctionContext<'a>,
     ) -> Result<(), CodegenError> {
@@ -16,12 +18,12 @@ impl Codegen {
         let end_label = context.create_label("while_end");
 
         context.switch_to_block(cond_label).unwrap();
-        let cond_value = self.lower_expression(condition, hir, context)?;
+        let cond_value = self.lower_expression(*condition, hir, context)?;
         context.branch_conditional(cond_value, body_label, end_label, &[], &[]);
 
         context.switch_to_block(body_label).unwrap();
         for stmt in body {
-            self.lower_statement(stmt, hir, context)?;
+            self.lower_statement(*stmt, hir, context)?;
         }
         context.branch(cond_label, &[]);
 
@@ -31,14 +33,14 @@ impl Codegen {
 
     fn emit_assign_statement<'a>(
         &mut self,
-        lhs: &HirExpression,
-        value: &HirExpression,
+        lhs: Spanned<PoolId<HirExpression>>,
+        value: Spanned<PoolId<HirExpression>>,
         hir: &SlynxHir,
         context: &mut FunctionContext<'a>,
-    ) -> Result<Option<Value>, CodegenError> {
+    ) -> Result<(), CodegenError> {
         let value = self.lower_expression(value, hir, context)?;
-
-        match &lhs.kind {
+        let lhs_raw = &hir[lhs.data];
+        match &lhs_raw.kind {
             HirExpressionKind::Identifier(id) => {
                 let slot = context
                     .get_variable(*id)
@@ -46,48 +48,100 @@ impl Codegen {
                 context.write(slot, value);
             }
             HirExpressionKind::FieldAccess {
-                expr: parent,
+                expr,
                 field_index,
-            } => {
-                let parent = self.lower_expression(parent, hir, context)?;
-                context.set_field(parent, *field_index as u16, value);
+                field_name,
+            } if let HirExpressionKind::Deref(inner) = hir.expressions[expr.data].kind => {
+                let field_type = {
+                    let field_type = {
+                        if let Some(ty) = hir.view(inner.data).ty_viewer().is_mutable_ref()
+                            && let Some(s) = ty.is_struct()
+                        {
+                            s.field_types()[*field_index]
+                        } else {
+                            panic!(
+                                "This shit should be a reference type, and since its inside a field access, a reference to a struct"
+                            )
+                        }
+                    };
+                    let ty = self.get_or_create_ir_type(&field_type, hir, context.ir())?;
+                    context.ir().pointer_type(ty)
+                };
+                let parent = self.lower_expression(inner, hir, context)?;
+                let parent = context.emit(
+                    Opcode::FieldRef(*field_index as u16),
+                    smallvec![parent],
+                    field_type,
+                );
+                context.deref_write(parent, value);
             }
-            _ => unreachable!("LHS of assignment must be Identifier or FieldAccess"),
+            HirExpressionKind::FieldAccess {
+                expr: parent_expr,
+                field_index,
+                field_name,
+            } => {
+                let is_external = hir.types_module.is_external(&hir[parent_expr.data].ty);
+
+                let parent = self.lower_expression(*parent_expr, hir, context)?;
+                match is_external {
+                    true => {
+                        let name = self.intern_to_ir(
+                            hir,
+                            context.ir(),
+                            field_name.expect("External field access must have a field name"),
+                        );
+                        context.dyn_set_field(parent, name, value)
+                    }
+                    _ => context.set_field(parent, *field_index as u16, value),
+                };
+            }
+            HirExpressionKind::Deref(parent_expr) => {
+                let parent = self.lower_expression(*parent_expr, hir, context)?;
+                let ty = context.ir().value_type(value);
+                context.emit(Opcode::DerefWrite, smallvec![parent, value], ty);
+            }
+            recv => unreachable!(
+                "LHS of assignment must be Identifier, FieldAccess or a deref, received {recv:?}"
+            ),
         }
-        Ok(None)
+        Ok(())
     }
 
     pub(crate) fn lower_statement<'a>(
         &mut self,
-        statement: &HirStatement,
+        statement: Spanned<PoolId<HirStatement>>,
         hir: &SlynxHir,
         context: &mut FunctionContext<'a>,
     ) -> Result<Option<Value>, CodegenError> {
-        match &statement.kind {
-            HirStatementKind::While { condition, body } => {
+        let stmt = &hir[statement.data];
+        match &stmt {
+            HirStatement::While { condition, body } => {
                 self.emit_while_statement(condition, body, hir, context)?;
                 Ok(None)
             }
-            HirStatementKind::Variable { name, value } => {
-                let vty = self.get_or_create_ir_type(&value.ty, hir, context.ir()).expect(
+            HirStatement::Variable { name, value } => {
+                let vty = self.get_or_create_ir_type(&hir[value.data].ty, hir, context.ir()).expect(
                     "Type of variable creation should be hoisted before mapping function bodies",
                 );
                 let slot = context.allocate(vty);
-                let val = self.lower_expression(value, hir, context)?;
+                let val = self.lower_expression(*value, hir, context)?;
                 context.write(slot, val);
                 context.add_variable(*name, slot);
                 Ok(None)
             }
-            HirStatementKind::Assign { lhs, value } => {
-                self.emit_assign_statement(lhs, value, hir, context)
+            HirStatement::Assign { lhs, value } => {
+                self.emit_assign_statement(*lhs, *value, hir, context)?;
+                Ok(None)
             }
-            HirStatementKind::Expression { expr } => {
-                let value = self.lower_expression(expr, hir, context)?;
+            HirStatement::Expression { expr } => {
+                let value = self.lower_expression(*expr, hir, context)?;
                 Ok(Some(value))
             }
-            HirStatementKind::Return { expr } => {
-                let value = self.lower_expression(expr, hir, context)?;
-                context.ret(value);
+            HirStatement::Return { expr } => {
+                if let Some(expr) = expr {
+                    let value = self.lower_expression(*expr, hir, context)?;
+                    context.ret(value);
+                }
                 Ok(None)
             }
         }

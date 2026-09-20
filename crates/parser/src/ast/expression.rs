@@ -1,56 +1,98 @@
 use crate::{
-    ASTStatement,
-    ast::{ComponentExpression, GenericIdentifier},
+    ASTStatement, SymbolPointer,
+    ast::{ComponentExpression, Type},
 };
-use common::{Operator, Span};
+use common::{Operator, Spanned, pool::DedupPoolId};
+use ordered_float::OrderedFloat;
+use smallvec::SmallVec;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 ///Simply a name that comes before an expression. It represents anything like 'name: expr', '.name:expr' etc
 pub struct NamedExpr {
-    pub name: String,
-    pub expr: ASTExpression,
-    pub span: Span,
+    pub name: SymbolPointer,
+    pub expr: Spanned<DedupPoolId<ASTExpression>>,
 }
 
-#[derive(Debug)]
-pub struct ASTExpression {
-    pub kind: ASTExpressionKind,
-    pub span: Span,
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub enum RangeType {
+    ///Range type that represents everything. Same as rust's '..'
+    All,
+    ///Range type that represents where it starts from. Same as rust's 'x..'
+    From(Spanned<DedupPoolId<ASTExpression>>),
+    ///Range type that represents where it ends at. Same as rust's '..x'
+    To(Spanned<DedupPoolId<ASTExpression>>),
+    ///Normal range representing where it starts and where it ends at. Same as rust's 'x..y'
+    Normal {
+        from: Spanned<DedupPoolId<ASTExpression>>,
+        to: Spanned<DedupPoolId<ASTExpression>>,
+    },
+    ///A basic index without ranges at all
+    NoRange(Spanned<DedupPoolId<ASTExpression>>),
 }
 
-#[derive(Debug)]
-pub enum ASTExpressionKind {
-    Component(ComponentExpression),
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub enum ASTExpression {
+    Null,
     IntLiteral(i32),
-    StringLiteral(String),
-    FloatLiteral(f32),
-    Tuple(Vec<ASTExpression>),
+    StringLiteral(SymbolPointer),
+    FloatLiteral(OrderedFloat<f32>),
+    Identifier(SymbolPointer),
+    True,
+    False,
+    Tuple(SmallVec<[Spanned<DedupPoolId<ASTExpression>>; 2]>),
     TupleAccess {
-        tuple: Box<ASTExpression>,
-        index: usize,
+        tuple: Spanned<DedupPoolId<ASTExpression>>,
+        index: u8,
     },
-    Boolean(bool),
+    Component(ComponentExpression),
     Binary {
-        lhs: Box<ASTExpression>,
+        lhs: Spanned<DedupPoolId<ASTExpression>>,
         op: Operator,
-        rhs: Box<ASTExpression>,
+        rhs: Spanned<DedupPoolId<ASTExpression>>,
     },
-    Identifier(String),
     ObjectExpression {
-        name: GenericIdentifier,
-        fields: Vec<NamedExpr>,
+        name: Spanned<DedupPoolId<Type>>,
+        fields: SmallVec<[Spanned<NamedExpr>; 4]>,
     },
     FieldAccess {
-        parent: Box<ASTExpression>,
-        field: String,
+        parent: Spanned<DedupPoolId<ASTExpression>>,
+        field: Spanned<DedupPoolId<ASTExpression>>,
+    },
+    /// A pattern-matching expression, e.g. `a matches Some(4)`.
+    ///
+    /// The left-hand side is any expression, and the right-hand side is a
+    /// pattern: a variant reference (bare identifier), an associated variant
+    /// reference (`Some(4)`), or a struct variant reference (`Foo { x: 1 }`).
+    Matches {
+        lhs: Spanned<DedupPoolId<ASTExpression>>,
+        pattern: Spanned<DedupPoolId<ASTExpression>>,
     },
     FunctionCall {
-        name: GenericIdentifier,
-        args: Vec<ASTExpression>,
+        name: Spanned<DedupPoolId<Type>>,
+        args: SmallVec<[Spanned<DedupPoolId<ASTExpression>>; 7]>,
     },
     If {
-        condition: Box<ASTExpression>,
-        body: Vec<ASTStatement>,
-        else_body: Option<Vec<ASTStatement>>,
+        condition: Spanned<DedupPoolId<ASTExpression>>,
+        body: Vec<Spanned<DedupPoolId<ASTStatement>>>,
+        else_body: Vec<Spanned<DedupPoolId<ASTStatement>>>,
     },
+    Array(SmallVec<[Spanned<DedupPoolId<ASTExpression>>; 2]>),
+    Vector(SmallVec<[Spanned<DedupPoolId<ASTExpression>>; 2]>),
+    IndexExpression(Spanned<DedupPoolId<ASTExpression>>, RangeType),
+    Reference {
+        mutable: bool,
+        expr: Spanned<DedupPoolId<ASTExpression>>,
+    },
+    Deref(Spanned<DedupPoolId<ASTExpression>>),
+}
+
+impl ASTExpression {
+    pub fn is_assignable(&self) -> bool {
+        matches!(
+            self,
+            ASTExpression::Identifier(_)
+                | ASTExpression::FieldAccess { .. }
+                | ASTExpression::Deref { .. }
+        )
+    }
 }

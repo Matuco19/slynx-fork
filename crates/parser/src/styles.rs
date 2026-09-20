@@ -1,18 +1,16 @@
-use common::Span;
-use slynx_lexer::tokens::TokenKind;
+use common::{Span, Spanned, pool::DedupPoolId};
+use slynx_lexer::{Token, tokens::TokenKind};
 
 use crate::{
-    ASTDeclaration, ASTDeclarationKind, ASTExpression, Parser, StyleBlock, StyleSheetStatement,
-    StyleState, error::ParseError,
+    ASTAttribute, ASTExpression, ExpectedContent, Parser, StyleBlock, StyleSheet,
+    StyleSheetStatement, StyleState, error::ParseError,
 };
 
-impl Parser {
+impl Parser<'_> {
     pub fn parse_style_state(&mut self) -> Result<StyleState, ParseError> {
         let mut states = Vec::new();
         loop {
-            let TokenKind::Identifier(state_name) = self.expect_identifier()?.kind else {
-                unreachable!()
-            };
+            let state_name = self.expect_identifier()?.data;
             states.push(state_name);
             if !matches!(self.peek()?.kind, TokenKind::Dot) {
                 break;
@@ -25,16 +23,14 @@ impl Parser {
         {
             self.eat()?;
             let duration = if self.peek()?.kind != TokenKind::RParen {
-                Some(self.parse_expression()?)
+                Some(self.parse_expression(&[])?)
             } else {
                 None
             };
             let curve = match self.peek()?.kind {
                 TokenKind::Colon if self.peek_at(1)?.kind != TokenKind::RParen => {
-                    let TokenKind::Identifier(ident) = self.expect_identifier()?.kind else {
-                        unreachable!();
-                    };
-                    Some(ident)
+                    let ident = self.expect_identifier()?;
+                    Some(ident.data)
                 }
                 _ => None,
             };
@@ -50,7 +46,10 @@ impl Parser {
         })
     }
 
-    pub fn parse_style_block(&mut self, state: StyleState) -> Result<StyleBlock, ParseError> {
+    pub fn parse_style_block(
+        &mut self,
+        state: StyleState,
+    ) -> Result<Spanned<StyleBlock>, ParseError> {
         let block_start = self.peek()?.span;
         let mut children_blocks = Vec::new();
         let mut properties = Vec::new();
@@ -67,7 +66,7 @@ impl Parser {
                     children_blocks.push(block);
                 }
                 _ => {
-                    let stmt = self.parse_named_expr()?;
+                    let stmt = self.parse_named_expr(&[])?;
                     properties.push(stmt);
                     if let TokenKind::Comma | TokenKind::SemiColon = self.peek()?.kind {
                         self.eat()?;
@@ -76,41 +75,57 @@ impl Parser {
             }
         }
         let block_end = self.expect(&TokenKind::RBrace)?.span;
-        Ok(StyleBlock {
-            state,
-            properties,
-            children: children_blocks,
-            span: block_start.merge_with(block_end),
-        })
+        Ok(Spanned::new(
+            StyleBlock {
+                state,
+                properties,
+                children: children_blocks,
+            },
+            block_start.merge_with(block_end),
+        ))
     }
 
-    pub fn parse_styles_statement(&mut self) -> Result<StyleSheetStatement, ParseError> {
-        let styles_span = self.expect(&TokenKind::Styles)?.span;
+    pub fn parse_styles_statement(&mut self) -> Result<Spanned<StyleSheetStatement>, ParseError> {
+        let styles_span = {
+            let ident = self.expect_identifier()?;
+            if ident.data != self.intern("styles") {
+                return Err(ParseError::UnexpectedToken(
+                    Token {
+                        kind: TokenKind::Identifier(self.symbols.get_name(ident.data).to_string()),
+                        span: ident.span,
+                    },
+                    ExpectedContent::Raw("Was expecting 'styles'".to_string()),
+                ));
+            }
+            ident.span
+        };
         self.expect(&TokenKind::LBrace)?;
         let mut styles = Vec::new();
-        let style_block = self.parse_style_block(StyleState::new_base())?;
+        let style_block = self.parse_style_block(StyleState::new())?;
         let outspan = styles_span.merge_with(style_block.span);
         styles.push(style_block);
-        Ok(StyleSheetStatement::Styles {
-            styles,
-            span: outspan,
-        })
+        Ok(Spanned::new(StyleSheetStatement::Styles(styles), outspan))
     }
 
-    pub fn parse_stylesheet_statement(&mut self) -> Result<StyleSheetStatement, ParseError> {
+    pub fn parse_stylesheet_statement(
+        &mut self,
+    ) -> Result<Spanned<StyleSheetStatement>, ParseError> {
         match self.peek()?.kind {
-            TokenKind::Styles => self.parse_styles_statement(),
+            TokenKind::Identifier(ref s) if s == "styles" => self.parse_styles_statement(),
             _ => {
-                let out = self
-                    .parse_statement()
-                    .map(|arg| StyleSheetStatement::Statement(Box::new(arg)));
+                let out = self.parse_statement(&[]).map(|arg| {
+                    let span = arg.span;
+                    Spanned::new(StyleSheetStatement::Statement(arg), span)
+                });
                 self.expect(&TokenKind::SemiColon)?;
                 out
             }
         }
     }
 
-    pub fn parse_stylesheet_body(&mut self) -> Result<Vec<StyleSheetStatement>, ParseError> {
+    pub fn parse_stylesheet_body(
+        &mut self,
+    ) -> Result<Vec<Spanned<StyleSheetStatement>>, ParseError> {
         let mut statements = Vec::new();
         loop {
             if let TokenKind::RBrace = self.peek()?.kind {
@@ -125,10 +140,13 @@ impl Parser {
     }
 
     ///Parses the usages of the stylesheet. Thus, the `uses` until the `{` without consuming the `{`. The given `span` is the `uses` identifier span
-    pub fn parse_usages(&mut self, _: Span) -> Result<Vec<ASTExpression>, ParseError> {
+    pub fn parse_usages(
+        &mut self,
+        _: Span,
+    ) -> Result<Vec<Spanned<DedupPoolId<ASTExpression>>>, ParseError> {
         let mut exprs = vec![];
         loop {
-            let usage = self.parse_funcall()?;
+            let usage = self.parse_funcall(&[])?;
             exprs.push(usage);
             match self.peek()?.kind {
                 TokenKind::Comma => {
@@ -149,8 +167,13 @@ impl Parser {
     }
 
     ///Parses a stylesheet. Thus the syntax `stylesheet Name(p1: T) uses Name2(f), F {...}`. The given `span` is the `stylesheet` keyword span
-    pub fn parse_stylesheet(&mut self, span: Span) -> Result<ASTDeclaration, ParseError> {
-        let name = self.parse_type()?;
+    pub fn parse_stylesheet(
+        &mut self,
+        span: Span,
+        attributes: Vec<Spanned<ASTAttribute>>,
+    ) -> Result<StyleSheet, ParseError> {
+        let (name, generics) = self.parse_generic_name()?;
+
         self.expect(&TokenKind::LParen)?;
         let args = {
             let mut out = Vec::new();
@@ -158,7 +181,7 @@ impl Parser {
                 if let TokenKind::RParen = self.peek()?.kind {
                     break out;
                 }
-                let arg = self.parse_typedname()?;
+                let arg = self.parse_typedname(&[])?;
                 out.push(arg);
                 if let TokenKind::Comma = self.peek()?.kind {
                     self.eat()?;
@@ -177,13 +200,14 @@ impl Parser {
         };
         self.expect(&TokenKind::LBrace)?;
         let body = self.parse_stylesheet_body()?;
-        let out = ASTDeclaration {
-            kind: ASTDeclarationKind::StyleSheet {
-                name,
-                args,
-                usages,
-                body,
-            },
+        let out = StyleSheet {
+            type_params: generics,
+            attributes,
+            visibility: Default::default(),
+            name,
+            args,
+            usages,
+            body,
             span,
         };
         self.expect(&TokenKind::RBrace)?;

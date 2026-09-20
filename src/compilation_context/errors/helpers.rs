@@ -3,12 +3,14 @@ use std::{
     ops::{Range, RangeFrom, RangeTo},
 };
 
+use std::fmt::Write;
+
+use module_loader::{SourceError, SourceErrorKind};
 use slynx_codegen::CodegenError;
 use slynx_hir::{HIRError, HIRErrorKind, SlynxHir};
 
 use slynx_lexer::error::LexerError;
 use slynx_parser::error::ParseError;
-use slynx_typechecker::error::{TypeError, TypeErrorKind};
 
 #[derive(Debug)]
 ///A metadata containing the `file` and `message` amd `source` data in a single string. This is being made to don't explode the requirement of sizoef(error) < 128, of rust.
@@ -116,32 +118,7 @@ impl fmt::Display for SlynxSuggestion {
         }
     }
 }
-/// this function converts a [`TypeError`] into a [`Vec<SlynxSuggestion>`]
-pub fn suggestions_from_type_error(err: &TypeError) -> Vec<SlynxSuggestion> {
-    match &err.kind {
-        TypeErrorKind::IncompatibleTypes { expected, received } => {
-            vec![SlynxSuggestion::IncompatibleTypes(
-                format!("{:?}", received),
-                format!("{:?}", expected),
-            )]
-        }
-        TypeErrorKind::CyclicType { ty } => vec![SlynxSuggestion::CyclicType(format!("{:?}", ty))],
-        TypeErrorKind::IncompatibleComponent { reason } => {
-            vec![SlynxSuggestion::IncompatibleComponent(format!(
-                "{:?}",
-                reason
-            ))]
-        }
-        TypeErrorKind::InvalidFuncallArgLength {
-            expected_length,
-            received_length,
-        } => vec![SlynxSuggestion::InvalidFuncallArgLength(
-            format!("{}", received_length),
-            format!("{}", expected_length),
-        )],
-        _ => vec![],
-    }
-}
+
 /// this function converts a [`LexerError`] into a [`Vec<SlynxSuggestion>`]
 pub fn suggestions_from_lexer(err: &LexerError) -> Vec<SlynxSuggestion> {
     match &err {
@@ -161,10 +138,7 @@ pub fn suggestions_from_lexer(err: &LexerError) -> Vec<SlynxSuggestion> {
 /// this function converts a [`ParseError`] into a [`Vec<SlynxSuggestion>`]
 pub fn suggestions_from_parser(err: &ParseError) -> Vec<SlynxSuggestion> {
     match &err {
-        ParseError::UnexpectedToken(token, expected) => vec![SlynxSuggestion::UnexpectedToken(
-            format!("{}", token),
-            expected.to_string(),
-        )],
+        ParseError::UnexpectedToken(_, _) => vec![],
         _ => vec![],
     }
 }
@@ -173,12 +147,20 @@ pub fn suggestions_from_parser(err: &ParseError) -> Vec<SlynxSuggestion> {
 pub fn suggestions_from_ir(err: &CodegenError) -> Vec<SlynxSuggestion> {
     match &err {
         CodegenError::DeclarationNotRecognized(sla) => {
-            vec![SlynxSuggestion::DeclarationNotRecognized(format!(
-                "{}",
-                sla.as_raw()
-            ))]
+            let mut buf = String::new();
+            let _ = write!(buf, "{sla:?}");
+            vec![SlynxSuggestion::DeclarationNotRecognized(buf)]
         }
         _ => vec![],
+    }
+}
+
+/// this function converts a [`SourceError`] into a [`Vec<SlynxSuggestion>`]
+pub fn suggestions_from_source(err: &SourceError) -> Vec<SlynxSuggestion> {
+    match err.kind() {
+        SourceErrorKind::Lexing(lex_err) => suggestions_from_lexer(lex_err),
+        SourceErrorKind::Parsing(parse_err) => suggestions_from_parser(parse_err),
+        SourceErrorKind::InexsitantSource(_, _, _) => vec![],
     }
 }
 
@@ -199,26 +181,10 @@ mod tests {
 
     use super::*;
 
-    use slynx_hir::DeclarationId;
-    use slynx_lexer::tokens::{Token, TokenKind};
+    use common::pool::PoolId;
+    use module_loader::FileId;
+    use slynx_hir::id::{AnyDeclarationId, AnyLocalDeclarationId};
 
-    #[test]
-    /// tests that [`suggestions_from_parser`] returns [`SlynxSuggestion::UnexpectedToken`] for [`ParseError::UnexpectedToken`]
-    fn test_suggestions_parser() {
-        let token = Token {
-            kind: TokenKind::Identifier("foo".to_string()),
-            span: common::Span { start: 0, end: 3 },
-        };
-        let err = ParseError::UnexpectedToken(token, "sla".to_string());
-        let result = suggestions_from_parser(&err);
-        assert_eq!(
-            result,
-            vec![SlynxSuggestion::UnexpectedToken(
-                "'foo'".to_string(),
-                "sla".to_string()
-            )]
-        );
-    }
     #[test]
     /// tests that [`suggestions_from_lexer`] returns [`SlynxSuggestion::UnrecognizedChar`] for [`LexerError::UnrecognizedChar`]
     fn test_suggestions_lexer() {
@@ -238,12 +204,15 @@ mod tests {
     #[test]
     /// tests that [`suggestions_from_ir`] returns [`SlynxSuggestion::DeclarationNotRecognized`] for [`IRError::DeclarationNotRecognized`]
     fn test_suggestions_ir() {
-        let id = DeclarationId::from_raw(42);
+        let id = AnyDeclarationId::new(
+            FileId::from_raw(0),
+            AnyLocalDeclarationId::Static(PoolId::new(0)),
+        );
         let err = CodegenError::DeclarationNotRecognized(id);
         let result = suggestions_from_ir(&err);
         assert_eq!(
             result,
-            vec![SlynxSuggestion::DeclarationNotRecognized("42".to_string())]
+            vec![SlynxSuggestion::DeclarationNotRecognized(format!("{id:?}"))]
         );
     }
 }

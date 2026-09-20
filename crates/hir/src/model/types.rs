@@ -20,29 +20,19 @@
 //!
 //! # Examples
 //!
-//! ```rust
-//! # use slynx_frontend::hir::model::HirType;
-//!
+//! ```text
 //! // Primitive types
 //! let int_type = HirType::Int;
 //! let bool_type = HirType::Bool;
 //!
-//! // Struct type with fields
-//! let struct_type = HirType::Struct {
-//!     fields: vec![type_id1, type_id2],
-//! };
+//! // Struct type
+//! let struct_type = HirType::Struct(struct_type_id);
 //!
 //! // Function type
-//! let func_type = HirType::Function {
-//!     args: vec![int_type_id, int_type_id],
-//!     return_type: int_type_id,
-//! };
+//! let func_type = HirType::Function(function_type_id);
 //!
 //! // Reference to a named type with generics
-//! let ref_type = HirType::Reference {
-//!     rf: type_id,
-//!     generics: vec![int_type_id],
-//! };
+//! let ref_type = HirType::new_generic_ref(option_id, vec![int_type_id]);
 //! ```
 //!
 //! # Related Types
@@ -52,71 +42,14 @@
 //! - [`crate::hir::TypeId`] — Type identifiers
 //! - [`crate::hir::modules::TypesModule`] — Type management
 
-use crate::{SymbolPointer, TypeId, VariableId};
+use crate::{
+    SymbolPointer,
+    context::{ComponentDefinition, StructDefinition, StyleMetadata},
+};
 
-use slynx_parser::VisibilityModifier;
-
-/// A method for accessing fields on types.
-///
-/// This enum describes how field accesses are resolved in the type system.
-/// Field accesses can target fields on concrete types, variables, or tuples.
-///
-/// # Variants
-///
-/// ## `Type`
-///
-/// Access a field on a concrete type by its type ID and field index.
-///
-/// ```slynx
-/// object Person { name: str, age: int }
-/// let p = Person(name: "Maria", age: 30);
-/// p.age  // Field(Type(Person, 1))
-/// ```
-///
-/// ## `Variable`
-///
-/// Access a field on a variable whose type may be a reference to a type.
-/// The actual type must be resolved during type checking.
-///
-/// ```slynx
-/// let x = get_person();  // x has type Person
-/// x.name  // Field(Variable(x_id, "name"))
-/// ```
-///
-/// ## `Tuple`
-///
-/// Access a field on a tuple by its numeric index.
-///
-/// ```slynx
-/// let t = (1, "hello", true);
-/// t.0  // Field(Tuple(t_id, 0))
-/// ```
-#[derive(Debug, Clone)]
-pub enum FieldMethod {
-    /// Access a field on a concrete type.
-    ///
-    /// # Fields
-    ///
-    /// - `0` — The type ID of the containing type
-    /// - `1` — The index of the field within the type
-    Type(TypeId, usize),
-
-    /// Access a field on a variable.
-    ///
-    /// # Fields
-    ///
-    /// - `0` — The variable ID
-    /// - `1` — The field name as a symbol
-    Variable(VariableId, SymbolPointer),
-
-    /// Access a field on a tuple.
-    ///
-    /// # Fields
-    ///
-    /// - `0` — The tuple's type ID
-    /// - `1` — The numeric index of the field
-    Tuple(TypeId, usize),
-}
+use common::{VisibilityModifier, pool::DedupPoolId};
+use module_loader::ASTBuiltin;
+use smallvec::SmallVec;
 
 /// A property of a component type.
 ///
@@ -138,7 +71,7 @@ pub enum FieldMethod {
 /// }
 /// ```
 #[derive(Debug, Clone)]
-pub struct ComponentProperty(VisibilityModifier, SymbolPointer, TypeId);
+pub struct ComponentProperty(VisibilityModifier, SymbolPointer, DedupPoolId<HirType>);
 
 impl ComponentProperty {
     /// Creates a new component property.
@@ -152,7 +85,11 @@ impl ComponentProperty {
     /// # Returns
     ///
     /// A new [`ComponentProperty`] instance.
-    pub fn new(visibility: VisibilityModifier, name: SymbolPointer, ty: TypeId) -> Self {
+    pub fn new(
+        visibility: VisibilityModifier,
+        name: SymbolPointer,
+        ty: DedupPoolId<HirType>,
+    ) -> Self {
         Self(visibility, name, ty)
     }
 
@@ -166,7 +103,7 @@ impl ComponentProperty {
     /// # Returns
     ///
     /// A new [`ComponentProperty`] with public visibility.
-    pub fn new_public(name: SymbolPointer, ty: TypeId) -> Self {
+    pub fn new_public(name: SymbolPointer, ty: DedupPoolId<HirType>) -> Self {
         Self::new(VisibilityModifier::Public, name, ty)
     }
 
@@ -180,7 +117,7 @@ impl ComponentProperty {
     /// # Returns
     ///
     /// A new [`ComponentProperty`] with private visibility.
-    pub fn new_private(name: SymbolPointer, ty: TypeId) -> Self {
+    pub fn new_private(name: SymbolPointer, ty: DedupPoolId<HirType>) -> Self {
         Self::new(VisibilityModifier::Private, name, ty)
     }
 
@@ -195,14 +132,65 @@ impl ComponentProperty {
     }
 
     /// Returns the property's type ID.
-    pub fn prop_type(&self) -> &TypeId {
-        &self.2
+    pub fn prop_type(&self) -> DedupPoolId<HirType> {
+        self.2
     }
+}
 
-    /// Returns a mutable reference to the property's type ID.
-    pub fn prop_type_mut(&mut self) -> &mut TypeId {
-        &mut self.2
-    }
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
+pub struct TupleType {
+    pub(crate) fields: Vec<DedupPoolId<HirType>>,
+}
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
+pub struct StructType {
+    pub(crate) fields: Vec<DedupPoolId<HirType>>,
+    pub(crate) metadata: DedupPoolId<StructDefinition>,
+}
+
+/// A single variant of an enum type.
+///
+/// Raw and raw-valued variants carry no payload; associated and struct
+/// variants carry an ordered list of payload types (struct field names are
+/// irrelevant to the runtime representation, so they are stored in
+/// declaration order). The `discriminant` is the compile-time tag used to
+/// distinguish variants at runtime.
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
+pub struct EnumVariantType {
+    /// The name of the variant.
+    pub name: SymbolPointer,
+    /// The ordered payload types, empty for raw/raw-valued variants.
+    pub payload: Vec<DedupPoolId<HirType>>,
+    /// The compile-time discriminant (tag) of this variant.
+    pub discriminant: i32,
+}
+
+/// A user-defined enum type.
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
+pub struct EnumType {
+    /// The name of the enum.
+    pub name: SymbolPointer,
+    /// The variants of this enum, in declaration order.
+    pub variants: Vec<EnumVariantType>,
+}
+
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
+pub struct ComponentType {
+    pub(crate) properties: Vec<DedupPoolId<HirType>>,
+    pub(crate) children: Vec<DedupPoolId<ComponentType>>,
+    pub(crate) metadata: DedupPoolId<ComponentDefinition>,
+}
+
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
+pub struct FunctionType {
+    pub(crate) args: SmallVec<[DedupPoolId<HirType>; 2]>,
+    pub(crate) ret: DedupPoolId<HirType>,
+}
+
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
+pub struct StyleType {
+    ///The arguments the stylesheet receives
+    pub(crate) args: SmallVec<[DedupPoolId<HirType>; 2]>,
+    pub(crate) metadata: DedupPoolId<StyleMetadata>,
 }
 
 /// The type system for the HIR.
@@ -231,51 +219,27 @@ impl ComponentProperty {
 /// ## Reference Types
 ///
 /// - [`Reference`](HirType::Reference) — References to named types with optional generics
-/// - [`VarReference`](HirType::VarReference) — References to variables
-/// - [`Field`](HirType::Field) — Type-level field accesses
 ///
 /// ## Special Types
 ///
-/// - [`Infer`](HirType::Infer) — A placeholder type to be inferred during type checking
 /// - [`GenericComponent`](HirType::GenericComponent) — A generic component type
 ///
 /// # Examples
 ///
-/// ```rust
-/// # use slynx_frontend::hir::model::HirType;
-/// # use crate::slynx_frontend::hir::TypeId;
-/// # let type_id = TypeId::from_raw(0);
-/// # let field_type = TypeId::from_raw(1);
-///
+/// ```text
 /// // Primitive types
 /// let int_type = HirType::Int;
 /// let bool_type = HirType::Bool;
 /// let void_type = HirType::Void;
 ///
-/// // Struct type
-/// let person_type = HirType::Struct {
-///     fields: vec![type_id, type_id],
-/// };
-///
-/// // Tuple type
-/// let tuple_type = HirType::Tuple {
-///     fields: vec![int_type_id, bool_type_id],
-/// };
-///
-/// // Function type: (int, int) -> int
-/// let func_type = HirType::Function {
-///     args: vec![int_type_id, int_type_id],
-///     return_type: int_type_id,
-/// };
+/// // Composite types are created through the HIR's type module and
+/// // referenced by their `DedupPoolId<HirType>`:
+/// let person_type = HirType::Struct(struct_type_id); // Person
+/// let tuple_type = HirType::Tuple(tuple_type_id);
+/// let func_type = HirType::Function(function_type_id);
 ///
 /// // Reference type with generics: Vec<int>
-/// let vec_type = HirType::Reference {
-///     rf: vec_type_id,
-///     generics: vec![int_type_id],
-/// };
-///
-/// // Field access type: person.age
-/// let field_type = HirType::Field(field_access_method);
+/// let vec_type = HirType::new_generic_ref(vec_type_id, vec![int_type_id]);
 ///
 /// // Type to be inferred
 /// let infer_type = HirType::Infer;
@@ -297,8 +261,16 @@ impl ComponentProperty {
 /// - [`crate::hir::modules::TypesModule`] — Manages type creation and lookup
 /// - [`crate::hir::TypeId`] — Type identifiers
 /// - [`crate::hir::model::ComponentProperty`] — Component property definitions
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum HirType {
+    Nullable(DedupPoolId<HirType>),
+    GenericParam {
+        index: u8,
+        name: SymbolPointer,
+    },
+
+    Array(DedupPoolId<HirType>, usize),
+    Vector(DedupPoolId<HirType>),
     /// A struct type with named fields.
     ///
     /// Structs are user-defined data structures with a fixed set of named fields.
@@ -313,21 +285,12 @@ pub enum HirType {
     /// }
     /// ```
     ///
-    /// In HIR, this becomes:
+    /// In HIR, this becomes a reference to a [`StructType`]:
     ///
-    /// ```rust
-    /// # use slynx_frontend::hir::model::HirType;
-    /// # use crate::slynx_frontend::hir::TypeId;
-    /// # let str_id = TypeId::from_raw(0);
-    /// # let int_id = TypeId::from_raw(1);
-    /// let person_type = HirType::Struct {
-    ///     fields: vec![str_id, int_id],
-    /// };
+    /// ```text
+    /// let person_type = HirType::Struct(struct_type_id);
     /// ```
-    Struct {
-        /// The type IDs of the struct's fields, in declaration order.
-        fields: Vec<TypeId>,
-    },
+    Struct(DedupPoolId<StructType>),
 
     /// A tuple type with positional fields.
     ///
@@ -341,21 +304,25 @@ pub enum HirType {
     /// let first = pair.0;  // 1
     /// ```
     ///
-    /// In HIR, this becomes:
+    /// In HIR, this becomes a reference to a [`TupleType`]:
     ///
-    /// ```rust
-    /// # use slynx_frontend::hir::model::HirType;
-    /// # use crate::slynx_frontend::hir::TypeId;
-    /// # let int_id = TypeId::from_raw(0);
-    /// # let str_id = TypeId::from_raw(1);
-    /// let tuple_type = HirType::Tuple {
-    ///     fields: vec![int_id, str_id],
-    /// };
+    /// ```text
+    /// let tuple_type = HirType::Tuple(tuple_type_id);
     /// ```
-    Tuple {
-        /// The type IDs of the tuple's elements, in order.
-        fields: Vec<TypeId>,
-    },
+    Tuple(DedupPoolId<TupleType>),
+
+    /// A user-defined enum type.
+    ///
+    /// Enums are a set of named variants, each of which may carry an ordered
+    /// payload (like `Option`'s `Some(int)`). The discriminant of the active
+    /// variant is stored alongside the payload so it can be matched and read.
+    Enum(DedupPoolId<EnumType>),
+
+    /// An immutable reference to a type. The difference of this to Reference type is that this represents a reference to a value with the given type, equivalent to C's pointer, the reference type is a reference to another type
+    ImutableRef(DedupPoolId<HirType>),
+
+    /// A mutable reference to a type.
+    MutableRef(DedupPoolId<HirType>),
 
     /// A reference to a named type.
     ///
@@ -378,63 +345,29 @@ pub enum HirType {
     /// In HIR, these become:
     ///
     /// ```rust
-    /// # use slynx_frontend::hir::model::HirType;
-    /// # use crate::slynx_frontend::hir::TypeId;
-    /// # let person_id = TypeId::from_raw(0);
-    /// # let int_id = TypeId::from_raw(1);
-    /// # let option_id = TypeId::from_raw(2);
+    /// # use slynx_hir::model::HirType;
+    /// # use common::pool::DedupPoolId;
+    /// # let person_id = DedupPoolId::<HirType>::new(0);
+    /// # let int_id = DedupPoolId::<HirType>::new(1);
+    /// # let option_id = DedupPoolId::<HirType>::new(2);
     ///
     /// // Reference to Person
-    /// let person_ref = HirType::Reference {
-    ///     rf: person_id,
-    ///     generics: vec![],
-    /// };
+    /// let person_ref = HirType::new_ref(person_id);
     ///
     /// // Reference to Option<int>
-    /// let option_int = HirType::Reference {
-    ///     rf: option_id,
-    ///     generics: vec![int_id],
-    /// };
+    /// let option_int = HirType::new_generic_ref(option_id, vec![int_id]);
     /// ```
     Reference {
         /// The referenced type ID.
         ///
         /// This points to the base type (e.g., the struct or component type).
-        rf: TypeId,
+        rf: DedupPoolId<HirType>,
 
         /// Generic type parameters, if any.
         ///
         /// For example, in `Vec<int>`, this would contain `[int]`.
-        generics: Vec<TypeId>,
+        generics: [DedupPoolId<HirType>; 8],
     },
-
-    /// A reference to a variable's type.
-    ///
-    /// This represents the type of a variable at a specific point in the program.
-    /// Used during type checking to resolve variable references.
-    ///
-    /// # Example
-    ///
-    /// ```slynx
-    /// let x = 42;        // x has type int
-    /// let y = x + 1;     // Field(VarReference(x_id), "...")
-    /// ```
-    VarReference(VariableId),
-
-    /// A field access on a type or variable.
-    ///
-    /// Represents the type of a field when accessed through a type or variable.
-    /// The actual type is resolved during type checking using the [`FieldMethod`].
-    ///
-    /// # Example
-    ///
-    /// ```slynx
-    /// object Person { name: str, age: int }
-    /// let p = Person(name: "Alice", age: 30);
-    /// let n = p.name;    // Field(FieldMethod::Variable(p_id, "name"))
-    /// let a = p.age;     // Field(FieldMethod::Type(Person, 1))
-    /// ```
-    Field(FieldMethod),
 
     /// A function type.
     ///
@@ -449,29 +382,14 @@ pub enum HirType {
     /// }
     /// ```
     ///
-    /// In HIR, this becomes:
+    /// In HIR, this becomes a reference to a [`FunctionType`]:
     ///
-    /// ```rust
-    /// # use slynx_frontend::hir::model::HirType;
-    /// # use crate::slynx_frontend::hir::TypeId;
-    /// # let int_id = TypeId::from_raw(0);
-    /// let add_type = HirType::Function {
-    ///     args: vec![int_id, int_id],
-    ///     return_type: int_id,
-    /// };
+    /// ```text
+    /// let add_type = HirType::Function(function_type_id);
     /// ```
-    Function {
-        /// The types of the function's arguments.
-        args: Vec<TypeId>,
-
-        /// The function's return type.
-        return_type: TypeId,
-    },
+    Function(DedupPoolId<FunctionType>),
     ///A Stylesheet definition
-    Style {
-        ///The arguments the stylesheet receives
-        args: Vec<TypeId>,
-    },
+    Style(DedupPoolId<StyleType>),
 
     /// A boolean type.
     ///
@@ -506,25 +424,12 @@ pub enum HirType {
     /// }
     /// ```
     ///
-    /// In HIR, this becomes:
+    /// In HIR, this becomes a reference to a [`ComponentType`]:
     ///
-    /// ```rust
-    /// # use slynx_frontend::hir::model::{HirType, ComponentProperty};
-    /// # use crate::slynx_frontend::hir::TypeId;
-    /// # use common::VisibilityModifier;
-    /// # let str_id = TypeId::from_raw(0);
-    /// # let int_id = TypeId::from_raw(1);
-    /// let button_type = HirType::Component {
-    ///     props: vec![
-    ///         ComponentProperty::new_public("label".into(), str_id),
-    ///         ComponentProperty::new_private("count".into(), int_id),
-    ///     ],
-    /// };
+    /// ```text
+    /// let button_type = HirType::Component(component_type_id);
     /// ```
-    Component {
-        /// The component's properties.
-        props: Vec<ComponentProperty>,
-    },
+    Component(DedupPoolId<ComponentType>),
 
     /// The void type.
     ///
@@ -540,24 +445,6 @@ pub enum HirType {
     /// ```
     Void,
 
-    /// A type to be inferred.
-    ///
-    /// Used as a placeholder during type checking when the type cannot be
-    /// determined immediately. The type checker will attempt to infer the
-    /// concrete type from context.
-    ///
-    /// # Example
-    ///
-    /// ```slynx
-    /// let x = 42;  // Type is inferred as `int`
-    /// ```
-    ///
-    /// During HIR generation, this is used for:
-    /// - Variables without explicit type annotations
-    /// - Integer and float literals
-    /// - Expressions where type inference is needed
-    Infer,
-
     /// A generic component type.
     ///
     /// Represents a component that can work with generic type parameters.
@@ -565,83 +452,6 @@ pub enum HirType {
 }
 
 impl HirType {
-    /// Creates a new `Generic` type from a generic name.
-    ///
-    /// # Arguments
-    ///
-    /// * `generic` — The name of the generic type (e.g., "int", "bool", "Component")
-    ///
-    /// # Returns
-    ///
-    /// * `Some(HirType)` — If the name matches a known primitive type
-    /// * `None` — If the name is not a recognized primitive type
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// # use slynx_frontend::hir::model::HirType;
-    /// let int_type = HirType::new("int");      // Some(HirType::Int)
-    /// let bool_type = HirType::new("bool");    // Some(HirType::Bool)
-    /// let unknown = HirType::new("Unknown");   // None
-    /// ```
-    pub fn new(generic: &str) -> Option<Self> {
-        match generic {
-            "Component" => Some(Self::GenericComponent),
-            "void" => Some(Self::Void),
-            "bool" => Some(Self::Bool),
-            "int" => Some(Self::Int),
-            "float" => Some(Self::Float),
-            "str" => Some(Self::Str),
-            _ => None,
-        }
-    }
-
-    /// Creates a new struct type with the given field types.
-    ///
-    /// # Arguments
-    ///
-    /// * `fields` — The type IDs of the struct's fields, in declaration order
-    ///
-    /// # Returns
-    ///
-    /// A new [`HirType::Struct`] instance.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// # use slynx_frontend::hir::model::HirType;
-    /// # use crate::slynx_frontend::hir::TypeId;
-    /// # let str_id = TypeId::from_raw(0);
-    /// # let int_id = TypeId::from_raw(1);
-    /// let person_type = HirType::new_struct(vec![str_id, int_id]);
-    /// ```
-    pub fn new_struct(fields: Vec<TypeId>) -> Self {
-        Self::Struct { fields }
-    }
-
-    /// Creates a new tuple type with the given element types.
-    ///
-    /// # Arguments
-    ///
-    /// * `fields` — The type IDs of the tuple's elements, in order
-    ///
-    /// # Returns
-    ///
-    /// A new [`HirType::Tuple`] instance.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// # use slynx_frontend::hir::model::HirType;
-    /// # use crate::slynx_frontend::hir::TypeId;
-    /// # let int_id = TypeId::from_raw(0);
-    /// # let str_id = TypeId::from_raw(1);
-    /// let tuple_type = HirType::new_tuple(vec![int_id, str_id]);
-    /// ```
-    pub fn new_tuple(fields: Vec<TypeId>) -> Self {
-        Self::Tuple { fields }
-    }
-
     /// Creates a new generic reference type.
     ///
     /// # Arguments
@@ -656,14 +466,19 @@ impl HirType {
     /// # Example
     ///
     /// ```rust
-    /// # use slynx_frontend::hir::model::HirType;
-    /// # use crate::slynx_frontend::hir::TypeId;
-    /// # let vec_id = TypeId::from_raw(0);
-    /// # let int_id = TypeId::from_raw(1);
+    /// # use slynx_hir::model::HirType;
+    /// # use common::pool::DedupPoolId;
+    /// # let vec_id = DedupPoolId::<HirType>::new(0);
+    /// # let int_id = DedupPoolId::<HirType>::new(1);
     /// let vec_int = HirType::new_generic_ref(vec_id, vec![int_id]);
     /// ```
-    pub fn new_generic_ref(rf: TypeId, generics: Vec<TypeId>) -> Self {
-        Self::Reference { rf, generics }
+    pub fn new_generic_ref(rf: DedupPoolId<HirType>, generics: Vec<DedupPoolId<HirType>>) -> Self {
+        assert!(generics.len() <= 8, "Slynx only supports up to 8 generics");
+        let mut arr = [DedupPoolId::new_null(); 8];
+        for (idx, generic) in generics.into_iter().enumerate() {
+            arr[idx] = generic;
+        }
+        Self::Reference { rf, generics: arr }
     }
 
     /// Creates a new reference type without generics.
@@ -681,88 +496,25 @@ impl HirType {
     /// # Example
     ///
     /// ```rust
-    /// # use slynx_frontend::hir::model::HirType;
-    /// # use crate::slynx_frontend::hir::TypeId;
-    /// # let person_id = TypeId::from_raw(0);
+    /// # use slynx_hir::model::HirType;
+    /// # use common::pool::DedupPoolId;
+    /// # let person_id = DedupPoolId::<HirType>::new(0);
     /// let person_ref = HirType::new_ref(person_id);
     /// ```
-    pub fn new_ref(rf: TypeId) -> Self {
+    pub fn new_ref(rf: DedupPoolId<HirType>) -> Self {
         Self::new_generic_ref(rf, Vec::new())
     }
+}
 
-    /// Creates a new function type.
-    ///
-    /// # Arguments
-    ///
-    /// * `args` — The types of the function's arguments
-    /// * `return_type` — The function's return type
-    ///
-    /// # Returns
-    ///
-    /// A new [`HirType::Function`] instance.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// # use slynx_frontend::hir::model::HirType;
-    /// # use crate::slynx_frontend::hir::TypeId;
-    /// # let int_id = TypeId::from_raw(0);
-    /// let add_type = HirType::new_function(vec![int_id, int_id], int_id);
-    /// ```
-    pub fn new_function(args: Vec<TypeId>, return_type: TypeId) -> Self {
-        Self::Function { args, return_type }
-    }
-
-    /// Creates a new component type.
-    ///
-    /// # Arguments
-    ///
-    /// * `props` — The component's properties
-    ///
-    /// # Returns
-    ///
-    /// A new [`HirType::Component`] instance.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// # use slynx_frontend::hir::model::{HirType, ComponentProperty};
-    /// # use crate::slynx_frontend::hir::TypeId;
-    /// # use common::VisibilityModifier;
-    /// # let str_id = TypeId::from_raw(0);
-    /// let button_type = HirType::new_component(vec![
-    ///     ComponentProperty::new_public("label".into(), str_id),
-    /// ]);
-    /// ```
-    pub fn new_component(props: Vec<ComponentProperty>) -> Self {
-        Self::Component { props }
-    }
-
-    /// Creates a field access type from a variable and field name.
-    ///
-    /// # Arguments
-    ///
-    /// * `var` — The variable ID
-    /// * `field` — The field name as a symbol
-    ///
-    /// # Returns
-    ///
-    /// A new [`HirType::Field`] instance with `FieldMethod::Variable`.
-    pub fn variable_field(var: VariableId, field: SymbolPointer) -> Self {
-        Self::Field(FieldMethod::Variable(var, field))
-    }
-
-    /// Creates a field access type from a type and field index.
-    ///
-    /// # Arguments
-    ///
-    /// * `ty` — The type ID of the containing type
-    /// * `field` — The field index
-    ///
-    /// # Returns
-    ///
-    /// A new [`HirType::Field`] instance with `FieldMethod::Type`.
-    pub fn type_field(ty: TypeId, field: usize) -> Self {
-        Self::Field(FieldMethod::Type(ty, field))
+impl From<ASTBuiltin> for HirType {
+    fn from(value: ASTBuiltin) -> Self {
+        match value {
+            ASTBuiltin::Boolean => Self::Bool,
+            ASTBuiltin::F16 | ASTBuiltin::F32 | ASTBuiltin::F64 => Self::Float,
+            ASTBuiltin::Int(_) | ASTBuiltin::Uint(_) => Self::Int,
+            ASTBuiltin::Void => Self::Void,
+            ASTBuiltin::Str => Self::Str,
+            ASTBuiltin::AnyComponent => Self::GenericComponent,
+        }
     }
 }

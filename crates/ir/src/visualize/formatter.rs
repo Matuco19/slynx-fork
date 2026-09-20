@@ -3,8 +3,9 @@ use std::collections::{BTreeSet, HashMap, HashSet, hash_map::Entry};
 use common::SymbolsModule;
 
 use crate::{
-    Component, Function, IRComponentId, IRPointer, IRSpecializedComponentType, IRType, IRTypes,
-    IRViewer, Instruction, Label, Opcode, Operand, SlynxIR, Value,
+    Component, Function, GlobalValue, IRComponentId, IRPointer, IRSpecializedComponentType,
+    IRStorage, IRType, IRTypes, IRUnionId, IRViewer, Instruction, Label, Opcode, Operand, SlynxIR,
+    Value,
 };
 
 pub struct Formatter<'a> {
@@ -72,8 +73,21 @@ impl<'a> Formatter<'a> {
             IRType::GenericComponent => "anycomponent".to_string(),
             IRType::Struct(t) => self.fmt_struct_type(t),
             IRType::Component(c) => self.fmt_component_type(c),
+            IRType::Union(u) => self.fmt_union_type(u),
             IRType::Specialized(IRSpecializedComponentType::Div) => "@div".to_string(),
             IRType::Specialized(IRSpecializedComponentType::Text) => "@text".to_string(),
+            IRType::Pointer(inner) => format!("{}*", {
+                let ty = self.types.get_type(*inner);
+                self.fmt_type(ty)
+            }),
+            IRType::Array(t, len) => format!("[{len}]{}", {
+                let ty = self.types.get_type(*t);
+                self.fmt_type(ty)
+            }),
+            IRType::Vector(t) => format!("[]{}", {
+                let ty = self.types.get_type(*t);
+                self.fmt_type(ty)
+            }),
         }
     }
 
@@ -85,7 +99,7 @@ impl<'a> Formatter<'a> {
             let fields = strukt
                 .get_fields()
                 .iter()
-                .map(|v| self.fmt_type(&self.types.get_type(*v)))
+                .map(|v| self.fmt_type(self.types.get_type(*v)))
                 .collect::<Vec<_>>()
                 .join(",");
             format!("{{{fields}}}")
@@ -97,23 +111,52 @@ impl<'a> Formatter<'a> {
         format!("%{}", self.symbols.get_name(component.name()))
     }
 
+    fn fmt_union_type(&self, id: &IRUnionId) -> String {
+        let union = self.types.get_union_type(*id);
+        if let Some(name) = union.name() {
+            format!("%{}", self.symbols.get_name(name))
+        } else {
+            let variants = union
+                .get_variants()
+                .iter()
+                .map(|v| self.fmt_type(self.types.get_type(*v)))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("{{{variants}}}")
+        }
+    }
+
     // ── top-level ──
 
     pub fn format_types(&self) -> String {
         let mut out = String::new();
-        for (name, fields) in self
-            .types
-            .structs()
-            .iter()
-            .filter_map(|s| s.name().map(|name| (name, s.get_fields())))
-        {
-            let fields = fields
+        for strukt in self.types.structs() {
+            let Some(name) = strukt.name() else {
+                continue;
+            };
+            let fields = strukt
+                .get_fields()
                 .iter()
-                .map(|f| self.fmt_type(&self.types.get_type(*f)))
+                .map(|f| self.fmt_type(self.types.get_type(*f)))
                 .collect::<Vec<_>>()
                 .join(",");
             out.push_str(&format!(
                 "struct %{}{{{fields}}};\n",
+                self.symbols.get_name(name),
+            ));
+        }
+        for union in self.types.unions() {
+            let Some(name) = union.name() else {
+                continue;
+            };
+            let variants = union
+                .get_variants()
+                .iter()
+                .map(|v| self.fmt_type(self.types.get_type(*v)))
+                .collect::<Vec<_>>()
+                .join(",");
+            out.push_str(&format!(
+                "union %{}{{{variants}}};\n",
                 self.symbols.get_name(name),
             ));
         }
@@ -123,6 +166,9 @@ impl<'a> Formatter<'a> {
     pub fn format_functions(&self) -> String {
         let mut out = Vec::new();
         for func in self.functions {
+            if func.is_external() {
+                continue;
+            }
             out.push(self.format_function(func));
         }
         for component in self.components {
@@ -135,17 +181,16 @@ impl<'a> Formatter<'a> {
         let IRType::Function(fty) = self.types.get_type(func.ty()) else {
             unreachable!("Type of function should be function");
         };
-        let func_ty = self.types.get_function_type(fty);
+        let func_ty = self.types.get_function_type(*fty);
         let args = func_ty
             .get_args()
             .iter()
-            .map(|ty| self.fmt_type(&self.types.get_type(*ty)))
+            .map(|ty| self.fmt_type(self.types.get_type(*ty)))
             .collect::<Vec<_>>()
             .join(", ");
         let ret_ty = self.fmt_type(
-            &self
-                .types
-                .get_type(self.types.get_function_type(fty).get_return_type()),
+            self.types
+                .get_type(self.types.get_function_type(*fty).get_return_type()),
         );
         let mut out = format!(
             "{ret_ty} {}({args}){{\n",
@@ -241,13 +286,7 @@ impl<'a> Formatter<'a> {
                 continue;
             }
             let dep_idx = op_val.idx();
-            if matches!(
-                self.instructions[dep_idx].opcode,
-                Opcode::Const(_) | Opcode::RawValue | Opcode::Arg(_) | Opcode::BlockParam(_)
-            ) {
-                continue;
-            }
-            if inline_set.contains(&dep_idx) {
+            if inline_set.contains(&dep_idx) || self.instructions[dep_idx].opcode.is_inlineable() {
                 continue;
             }
             if label_inst_set.contains(&dep_idx) {
@@ -263,11 +302,11 @@ impl<'a> Formatter<'a> {
         let IRType::Component(cid) = self.types.get_type(component.ir_type()) else {
             unreachable!("Type of component should be Component");
         };
-        let comp_ty = self.types.get_component_type(cid);
+        let comp_ty = self.types.get_component_type(*cid);
         let params = comp_ty
             .fields()
             .iter()
-            .map(|v| self.fmt_type(&self.types.get_type(*v)))
+            .map(|v| self.fmt_type(self.types.get_type(*v)))
             .collect::<Vec<_>>();
 
         let fields = params
@@ -283,9 +322,9 @@ impl<'a> Formatter<'a> {
             .map(|(idx, c)| {
                 let ty = self.ir.get_type(*c);
                 let ty = if let IRType::Component(component) = ty {
-                    self.fmt_component_type(&component)
+                    self.fmt_component_type(component)
                 } else {
-                    self.fmt_type(&ty)
+                    self.fmt_type(ty)
                 };
 
                 format!("  #c{idx}: {ty};")
@@ -415,10 +454,29 @@ impl<'a> Formatter<'a> {
         format!("{header}{body}")
     }
 
+    pub fn fmt_global(&self, value: IRPointer<GlobalValue, 1>) -> String {
+        let name = self.ir.get_name(self.ir.get(value).name);
+        format!("%{name}")
+    }
+
     // ── instruction formatting ──
 
     pub fn format_instruction(&self, instr: &Instruction) -> String {
         match &instr.opcode {
+            Opcode::Move => format!("move {}", self.fmt_operands(&instr.operands)),
+            Opcode::Copy => format!("copy {}", self.fmt_operands(&instr.operands)),
+            Opcode::Ref => format!("ref {}", self.fmt_operands(&instr.operands)),
+            Opcode::Deref => format!("deref {}", self.fmt_operands(&instr.operands)),
+            Opcode::DerefWrite => format!("deref_write {}", self.fmt_operands(&instr.operands)),
+            Opcode::FieldRef(index) => {
+                format!("field_ref {}, {index}", self.fmt_operands(&instr.operands))
+            }
+            Opcode::Zeroed => "zeroed".to_string(),
+            Opcode::ArrayGet => format!("array_get {}", self.fmt_operands(&instr.operands)),
+            Opcode::Array => format!("[{}]", self.fmt_operands(&instr.operands)),
+            Opcode::Vector => format!("vec[{}]", self.fmt_operands(&instr.operands)),
+            Opcode::GlobalExtern(global) => format!("@extern \"{}\"", self.ir.get_name(*global)),
+            Opcode::Global(global_value) => self.fmt_global(*global_value),
             Opcode::Br(label_ptr) => {
                 let label_str = self.fmt_label_ref(*label_ptr);
                 let args = self.fmt_operands(&instr.operands);
@@ -462,14 +520,31 @@ impl<'a> Formatter<'a> {
             Opcode::AShr => self.fmt_binary("ashr", instr),
 
             Opcode::GetField(index) => {
-                let ty_str = self.fmt_type(&self.types.get_type(instr.value_type));
+                let ty_str = self.fmt_type(self.types.get_type(instr.value_type));
                 let target = self.fmt_value(instr.operands[0]);
                 format!("getfield {ty_str}, {target}, {index};")
             }
             Opcode::SetField(index) => {
                 let target = self.fmt_value(instr.operands[0]);
                 let value = self.fmt_value(instr.operands[1]);
-                format!("propset {target}, {index}, {value};")
+                format!("setfield {target}, {index}, {value};")
+            }
+            Opcode::DynGetField(name) => {
+                let target = self.fmt_value(instr.operands[0]);
+                let name_str = self.ir.get_name(*name);
+                format!("dynpropget {target}, \"{name_str}\";")
+            }
+            Opcode::DynSetField(name) => {
+                let target = self.fmt_value(instr.operands[0]);
+                let value = self.fmt_value(instr.operands[1]);
+                let name_str = self.ir.get_name(*name);
+                format!("dynpropset {target}, \"{name_str}\", {value};")
+            }
+            Opcode::DynMethodCall(name) => {
+                let object = self.fmt_value(instr.operands[0]);
+                let args = self.fmt_operands(&instr.operands[1..]);
+                let name_str = self.ir.get_name(*name);
+                format!("dynmethodcall {object}, \"{name_str}\", ({args})")
             }
             Opcode::Call(func) => {
                 let args = self.fmt_operands(&instr.operands);
@@ -480,11 +555,11 @@ impl<'a> Formatter<'a> {
             Opcode::Allocate => {
                 format!(
                     "allocate {};",
-                    self.fmt_type(&self.types.get_type(instr.value_type))
+                    self.fmt_type(self.types.get_type(instr.value_type))
                 )
             }
             Opcode::Write => {
-                let ty_str = self.fmt_type(&self.types.get_type(instr.value_type));
+                let ty_str = self.fmt_type(self.types.get_type(instr.value_type));
                 format!(
                     "write {ty_str}, {}, {};",
                     self.fmt_value(instr.operands[0]),
@@ -492,15 +567,12 @@ impl<'a> Formatter<'a> {
                 )
             }
             Opcode::Read => {
-                let ty_str = self.fmt_type(&self.types.get_type(instr.value_type));
+                let ty_str = self.fmt_type(self.types.get_type(instr.value_type));
                 format!("read {ty_str}, {};", self.fmt_value(instr.operands[0]))
             }
-            Opcode::Reinterpret => {
-                let ty_str = self.fmt_type(&self.types.get_type(instr.value_type));
-                format!(
-                    "reinterpret {ty_str}, {};",
-                    self.fmt_value(instr.operands[0])
-                )
+            Opcode::Cast => {
+                let ty_str = self.fmt_type(self.types.get_type(instr.value_type));
+                format!("cast {ty_str}, {};", self.fmt_value(instr.operands[0]))
             }
             Opcode::Const(op) => self.fmt_operand(op),
             Opcode::RawValue => {
@@ -529,7 +601,7 @@ impl<'a> Formatter<'a> {
                 format!("@initcall {name}, {comp};")
             }
             Opcode::Struct | Opcode::Component => {
-                let ty_str = self.fmt_type(&self.types.get_type(instr.value_type));
+                let ty_str = self.fmt_type(self.types.get_type(instr.value_type));
                 let args = self.fmt_operands(&instr.operands);
                 format!("{ty_str}{{{args}}}")
             }
@@ -589,7 +661,7 @@ impl<'a> Formatter<'a> {
     }
 
     fn fmt_binary(&self, op: &str, instr: &Instruction) -> String {
-        let ty_str = self.fmt_type(&self.types.get_type(instr.value_type));
+        let ty_str = self.fmt_type(self.types.get_type(instr.value_type));
         let a = self.fmt_value(instr.operands[0]);
         let b = self.fmt_value(instr.operands[1]);
         format!("{} {}, {}, {};", op, ty_str, a, b)
@@ -606,7 +678,12 @@ impl<'a> Formatter<'a> {
     fn produces_value(&self, instr: &Instruction) -> bool {
         !matches!(
             instr.opcode,
-            Opcode::Br(_) | Opcode::Cbr { .. } | Opcode::Write | Opcode::SetField(_) | Opcode::Ret
+            Opcode::Br(_)
+                | Opcode::Cbr { .. }
+                | Opcode::Write
+                | Opcode::SetField(_)
+                | Opcode::DynSetField(_)
+                | Opcode::Ret
         )
     }
 
@@ -656,8 +733,8 @@ impl<'a> Formatter<'a> {
             .filter(|(idx, count)| {
                 *count == 1
                     && matches!(
-                        self.instructions[*idx].opcode,
-                        Opcode::Component | Opcode::Struct
+                        &self.instructions[*idx],
+                        Instruction{opcode: Opcode::Component | Opcode::Struct, operands, ..} if operands.iter().all(|v| self.ir.get_instruction(*v).opcode.is_inlineable())
                     )
             })
             .map(|(idx, _)| idx)

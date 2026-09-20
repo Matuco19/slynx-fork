@@ -1,19 +1,21 @@
+import std using Color;
 stylesheet Bg(color: int) uses Fg(color - 0x00ffff) {
     styles {
-        default {
-            backgroundColor: color
-        }
+        backgroundColor: Color(inner:color)
     }
 }
 
 stylesheet Fg(color: int) {
     styles {
         default {
-            foregroundColor: color
+            foregroundColor: Color(inner:color)
         }
     }
 }
-
+component Div {}
+component Text {
+    pub prop text:str;
+}
 component Pedrinho {
     Div {
         Text {
@@ -24,7 +26,6 @@ component Pedrinho {
 
 component Jorgin {
     Text {
-        style: Fg(0xff00ff),
         text: "Jorginho neguinho"
     }
     Pedrinho {}

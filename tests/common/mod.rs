@@ -1,46 +1,53 @@
 #![allow(dead_code)]
 
-use slynx_hir::{
-    SlynxHir,
-    model::HirDeclaration,
-    model::{HirDeclarationKind, HirExpression, HirExpressionKind, HirStatementKind},
-};
-use slynx_lexer::Lexer;
-use slynx_parser::Parser;
+use std::path::PathBuf;
 
-pub fn load_hir(path: &str) -> SlynxHir {
-    let source = std::fs::read_to_string(path).expect("source file should exist");
-    let tokens = Lexer::tokenize(&source).expect("source should tokenize");
-    let declarations = Parser::new(tokens)
-        .parse_declarations()
-        .expect("source should parse");
-    let mut hir = SlynxHir::new();
-    hir.generate(&declarations).expect("HIR should generate");
-    hir
+use slynx::SlynxContext;
+use slynx_ir::SlynxIR;
+pub fn load_source(source: &str) -> SlynxContext {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be after unix epoch")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("slynx-source-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir should be creatable");
+    let path = dir.join("test.syx");
+    std::fs::write(&path, source).expect("source should be written");
+    SlynxContext::new(path, Some(PathBuf::from("./lib/std")))
+        .expect("context should be created from temp file")
+}
+pub fn load_context(path: &str) -> SlynxContext {
+    SlynxContext::new(path.into(), None).expect("Context should generate")
+}
+pub static STD_PATH: std::sync::LazyLock<PathBuf> =
+    std::sync::LazyLock::new(|| PathBuf::from("lib/std"));
+pub fn compile_ok(path: &str) -> SlynxIR {
+    let result = slynx::compile_to_ir(PathBuf::from(path), Some(STD_PATH.clone()));
+
+    assert!(
+        result.is_ok(),
+        "compilation failed for {path}:\n{:?}",
+        result.err().unwrap(),
+    );
+    result.unwrap()
 }
 
-pub fn find_main_call_args(hir: &mut SlynxHir) -> Option<&mut Vec<HirExpression>> {
-    let pos = hir.declarations.iter().position(|v| matches!(v.kind, HirDeclarationKind::Function { name, .. } if hir.get_name(name) == "main"))?;
-    let HirDeclaration {
-        kind: HirDeclarationKind::Function { statements, .. },
-        ..
-    } = &mut hir.declarations[pos]
-    else {
-        unreachable!()
-    };
-    for statement in statements {
-        let expr = match &mut statement.kind {
-            HirStatementKind::Variable { value, .. } => value,
-            HirStatementKind::Expression { expr } => expr,
-            HirStatementKind::Return { expr } => expr,
-            HirStatementKind::Assign { value, .. } => value,
-            HirStatementKind::While { .. } => continue,
-        };
-        let HirExpressionKind::FunctionCall { args, .. } = &mut expr.kind else {
-            continue;
-        };
-        return Some(args);
+/// Compiles inline source code through the full pipeline.
+/// Returns `Ok(())` on success or the formatted error message on failure.
+pub fn compile_source(source: &str) -> std::result::Result<(), String> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be after unix epoch")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("slynx-checker-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join("test.syx");
+    std::fs::write(&path, source).map_err(|e| e.to_string())?;
+    let context = slynx::SlynxContext::new(path, None).map_err(|e| e.to_string())?;
+    match context.compile() {
+        Ok(_) => Ok(()),
+        Err(e) => Err(e.to_string()),
     }
-
-    None
 }

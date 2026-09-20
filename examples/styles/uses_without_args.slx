@@ -1,18 +1,22 @@
+import std using Color;
 stylesheet Base() {
     styles {
-        foregroundColor: 0xff0000
+        foregroundColor: Color(inner:0xff0000)
     }
 }
 
 stylesheet Derived() uses Base() {
     styles {
-        backgroundColor: 0x00ff00
+        backgroundColor: Color(inner:0x00ff00)
     }
 }
-
+component Div {}
+component Text {
+    pub prop text:str;
+}
 component Root {
     Div {
-        style: Derived(),
+
         Text {
             text: "hello"
         }

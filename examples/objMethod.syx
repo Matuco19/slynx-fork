@@ -1,0 +1,16 @@
+func main(): void {
+    let v = Counter.new();
+    v.increment(5);
+}
+
+pub object Counter {
+    value: int,
+
+    func new(): Self {
+        Self(value: 0)
+    }
+
+    func increment(&mut self, amount: int): void {
+        self.value = self.value + amount;
+    }
+}

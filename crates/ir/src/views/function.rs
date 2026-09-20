@@ -9,19 +9,13 @@ impl<'a> IRViewer<'a, Label> {
     }
 }
 
-impl<'a> std::ops::Deref for IRViewer<'a, Label> {
-    type Target = Label;
-    fn deref(&self) -> &Self::Target {
-        self.value()
-    }
-}
-
 impl<'a> IRViewer<'a, Function> {
     pub fn raw_type(&self) -> &IRFunction {
         let ty = self.ir.get(self.ptr).ty();
         let IRType::Function(id) = self.ir.types.get_type(ty) else {
             unreachable!();
         };
+        let id = *id;
         self.ir.types.get_function_type(id)
     }
 

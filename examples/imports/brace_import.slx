@@ -1,0 +1,19 @@
+import styles using {Background};
+import utils.components using {Text, Div};
+
+stylesheet MyStyleOtherStyle(color: int) uses Background(color) {
+	styles {
+		default {
+			backgroundColor: color
+		}
+	}
+}
+
+component MyOtherComponent {
+	Div {
+
+		Text {
+			text: "Brace import"
+		}
+	}
+}

@@ -1,6 +1,8 @@
-use smallvec::SmallVec;
+use smallvec::{SmallVec, smallvec};
 
-use crate::{Function, IRPointer, IRTypeId, Label, Operand, StyleProperty, Value};
+use crate::{
+    Function, GlobalValue, IRPointer, IRTypeId, Label, Operand, StyleProperty, SymbolPointer, Value,
+};
 
 // ── Opcode ─────────────────────────────────────────────────────────────────
 
@@ -10,6 +12,21 @@ use crate::{Function, IRPointer, IRTypeId, Label, Operand, StyleProperty, Value}
 /// IR references directly — no separate lookup table required.
 #[derive(Debug, Clone)]
 pub enum Opcode {
+    ///Moves the first operand. This instruction is mainly idealized to make it easier to represent move semantics.
+    Move,
+    ///Copies the first operand.
+    Copy,
+    /// Casts the first operand to the second operand.
+    Cast,
+
+    /// A reference to a value. The first operand is the value being referenced. It should always be a variable
+    Ref,
+    /// Dereferences a value. The first operand is the value being dereferenced.
+    Deref,
+    /// Dereferences a value and writes to it. The first operand is the value being dereferenced, and the second operand is the value to write.
+    DerefWrite,
+    /// Gets the reference to the field of the value. The first operand is the value being referenced, the value inside this variant is the index of the struct field.
+    FieldRef(u16),
     // ═══════════════════════════════════════════════════════════════════
     //  Values
     // ═══════════════════════════════════════════════════════════════════
@@ -73,6 +90,18 @@ pub enum Opcode {
     /// Operands: `[object, value]`.
     SetField(u16),
 
+    /// Dynamically get a field by name from an external object.
+    /// Operands: `[object]`.
+    DynGetField(SymbolPointer),
+
+    /// Dynamically set a field by name on an external object.
+    /// Operands: `[object, value]`.
+    DynSetField(SymbolPointer),
+
+    /// Dynamically call a method by name on an external object.
+    /// Operands: `[object, arg0, arg1, ...]`.
+    DynMethodCall(SymbolPointer),
+
     GetChild(u16),
 
     // ═══════════════════════════════════════════════════════════════════
@@ -96,12 +125,6 @@ pub enum Opcode {
     /// Call a function.  Operands are the call arguments.
     Call(IRPointer<Function, 1>),
 
-    // ═══════════════════════════════════════════════════════════════════
-    //  Reinterpret / raw
-    // ═══════════════════════════════════════════════════════════════════
-    /// Reinterpret the bits of a value as a different type.
-    Reinterpret,
-
     /// A "raw value" wrapper.  The sole operand is a [`Value`] that
     /// holds the raw bits.
     RawValue,
@@ -116,6 +139,14 @@ pub enum Opcode {
 
     /// Call a style initializer function on a component.
     InitCall(IRPointer<Function, 1>),
+
+    Global(IRPointer<GlobalValue, 1>),
+    GlobalExtern(SymbolPointer),
+    Array,
+    Vector,
+    ///Gets the array on the given index. The first operand is the value to be indexed, and the second operand is the index
+    ArrayGet,
+    Zeroed,
 }
 
 // ── Instruction ────────────────────────────────────────────────────────────
@@ -154,9 +185,12 @@ impl Opcode {
     pub fn is_impure(&self) -> bool {
         matches!(
             self,
-            Opcode::Allocate
+            Opcode::DerefWrite
+                | Opcode::Allocate
                 | Opcode::Write
                 | Opcode::SetField(_)
+                | Opcode::DynSetField(_)
+                | Opcode::DynMethodCall(_)
                 | Opcode::Call(_)
                 | Opcode::InitCall(_)
                 | Opcode::SApply { .. }
@@ -168,7 +202,11 @@ impl Opcode {
     pub fn is_inlineable(&self) -> bool {
         matches!(
             self,
-            Opcode::Const(_) | Opcode::Arg(_) | Opcode::BlockParam(_) | Opcode::RawValue
+            Opcode::Const(_)
+                | Opcode::Arg(_)
+                | Opcode::BlockParam(_)
+                | Opcode::RawValue
+                | Opcode::Ref
         )
     }
 }
@@ -188,6 +226,13 @@ macro_rules! binop_ctor {
 }
 
 impl Instruction {
+    pub fn zeroed(ty: IRTypeId) -> Self {
+        Self {
+            opcode: Opcode::Zeroed,
+            value_type: ty,
+            operands: smallvec![],
+        }
+    }
     /// Build a call instruction.
     pub fn call(
         func: IRPointer<Function, 1>,
@@ -320,6 +365,40 @@ impl Instruction {
             value_type: ty,
         }
     }
+
+    pub fn dyngetfield(name: SymbolPointer, object: Value, ty: IRTypeId) -> Self {
+        let mut operands = SmallVec::new();
+        operands.push(object);
+        Instruction {
+            opcode: Opcode::DynGetField(name),
+            operands,
+            value_type: ty,
+        }
+    }
+
+    pub fn dynsetfield(name: SymbolPointer, object: Value, value: Value, ty: IRTypeId) -> Self {
+        let mut operands = SmallVec::new();
+        operands.push(object);
+        operands.push(value);
+        Instruction {
+            opcode: Opcode::DynSetField(name),
+            operands,
+            value_type: ty,
+        }
+    }
+
+    pub fn dynmethodcall(
+        name: SymbolPointer,
+        operands: SmallVec<[Value; 4]>,
+        ty: IRTypeId,
+    ) -> Self {
+        Instruction {
+            opcode: Opcode::DynMethodCall(name),
+            operands,
+            value_type: ty,
+        }
+    }
+
     pub fn getchild(index: u16, ty: IRTypeId) -> Self {
         Instruction {
             opcode: Opcode::GetChild(index),
@@ -374,7 +453,17 @@ impl Instruction {
             value_type: ty,
         }
     }
-
+    pub fn global_value(
+        value: IRPointer<GlobalValue, 1>,
+        ty: IRTypeId,
+        initial_value: Value,
+    ) -> Self {
+        Instruction {
+            opcode: Opcode::Global(value),
+            operands: smallvec![initial_value],
+            value_type: ty,
+        }
+    }
     // ── Binary op constructors ──
 
     binop_ctor!(add, Add);

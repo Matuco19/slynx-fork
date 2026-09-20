@@ -1,6 +1,7 @@
+.PHONY: test
 #Test the project and print output to the terminal.
 test:
-	cargo test -- --no-capture
+	STD_PATH=./lib/std cargo test --verbose
 
 #Run test with Rust backtraces enabled.
 #Shows a stack trace when a test panics.
@@ -12,24 +13,16 @@ test-logging:
 	@test -n "$(FILE)" || (echo "Use with: make test-logging FILE=file.slx"; exit 1)
 	cargo test -- --no-capture --show-output 2>&1 | tee $(FILE)
 
-#Run the application in debug mode with backtraces enabled targeting a specific file.
-#Useful for diagnosing runtime panics.
-debug:
-	@test -n "$(FILE)" || (echo "Use with: make debug FILE=file.slx"; exit 1)
-	RUST_BACKTRACE=1 cargo run -- --target $(FILE)
-
-#Run the application in debug mode targeting a specific file.
-run:
-	@test -n "$(FILE)" || (echo "Use with: make run FILE=file.slx"; exit 1)
-	cargo run -- --target $(FILE)
-
-#Run the application in release mode.
-release:
-	cargo run --release
-
 #Checks if the compiler is running properly, according to CI/CD
 check:
-	cargo test --verbose
+	STD_PATH=./lib/std cargo test --verbose
 	cargo fmt --all -- --check
 	cargo clippy --all-targets --all-features -- -D warnings
 	cargo build --verbose
+
+install_std:
+	mkdir -p ~/.slynx/std
+	cp -r lib/std/* ~/.slynx/std
+
+uninstall_std:
+	rm -r ~/.slynx/std

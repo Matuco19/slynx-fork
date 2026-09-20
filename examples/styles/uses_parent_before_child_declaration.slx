@@ -1,22 +1,21 @@
+import std;
 stylesheet Child() uses Parent() {
     styles {
-        default {
-            backgroundColor: 0x0000ff
-        }
+        backgroundColor: Color(inner:0x0000ff)
     }
 }
 
 stylesheet Parent() {
     styles {
-        default {
-            foregroundColor: 0xff0000
-        }
+        foregroundColor: Color(inner:0xff0000)
     }
 }
-
+component Div {}
+component Text {
+    pub prop text:str;
+}
 component Root {
     Div {
-        style: Child(),
         Text {
             text: "hello"
         }

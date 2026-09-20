@@ -1,18 +1,21 @@
 mod errors;
+
 use std::{
-    collections::HashMap,
+    collections::HashSet,
+    ops::Deref,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-use common::SymbolPointer;
-use slynx_codegen::{Codegen, CodegenError};
-use slynx_hir::{SlynxHir, VariableId, modules::DeclarationsModule};
+use common::{FrontendSymbol, SymbolsModule, pool::DedupPool};
+use dashmap::DashMap;
+use module_loader::{Modules, SourceLoader, SourceProvider};
+use slynx_codegen::Codegen;
+use slynx_hir::{SlynxHir, id::AnyDeclarationId, ownership::OwnershipAnalysis};
 use slynx_ir::SlynxIR;
 use slynx_lexer::{Lexer, TokenStream};
 use slynx_monomorphizer::Monomorphizer;
-use slynx_parser::{ASTDeclaration, Parser};
-use slynx_typechecker::TypeChecker;
+use slynx_parser::{ASTExpression, ASTStatement, Parser, Program, Type};
 
 pub use crate::compilation_context::errors::*;
 
@@ -25,8 +28,51 @@ pub struct CompilationOutput {
 #[derive(Debug)]
 pub struct CompilationStages {
     entry_point: PathBuf,
-    hir_dump: String,
     ir: SlynxIR,
+}
+
+pub struct FilesProvider {
+    files: DashMap<Arc<PathBuf>, (String, Vec<usize>)>,
+}
+
+impl Default for FilesProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl FilesProvider {
+    pub fn new() -> Self {
+        Self {
+            files: DashMap::new(),
+        }
+    }
+    pub fn insert(&self, path: &Path, content: String) {
+        let lines = content
+            .chars()
+            .enumerate()
+            .filter_map(|(idx, c)| if c == '\n' { Some(idx) } else { None })
+            .collect::<Vec<_>>();
+
+        self.files.insert(Arc::new(path.into()), (content, lines));
+    }
+}
+
+impl Deref for FilesProvider {
+    type Target = DashMap<Arc<PathBuf>, (String, Vec<usize>)>;
+    fn deref(&self) -> &Self::Target {
+        &self.files
+    }
+}
+
+impl SourceProvider<'static> for FilesProvider {
+    fn read(&self, path: &Path) -> std::io::Result<String> {
+        if let Some(file) = self.get(&Arc::new(path.into())) {
+            return Ok(file.0.clone());
+        }
+        let file = std::fs::read_to_string(path)?;
+        self.insert(path, file.clone());
+        Ok(file)
+    }
 }
 
 impl CompilationOutput {
@@ -56,16 +102,11 @@ impl CompilationOutput {
 }
 
 impl CompilationStages {
-    fn new(entry_point: &Path, hir_dump: String, ir: SlynxIR) -> Self {
+    fn new(entry_point: &Path, ir: SlynxIR) -> Self {
         Self {
             entry_point: entry_point.to_path_buf(),
-            hir_dump,
             ir,
         }
-    }
-
-    pub fn hir_text(&self) -> &str {
-        &self.hir_dump
     }
 
     pub fn ir_text(&self) -> String {
@@ -74,11 +115,6 @@ impl CompilationStages {
 
     pub fn dump_path(&self, extension: &str) -> PathBuf {
         self.entry_point.with_extension(extension)
-    }
-
-    pub fn write_hir(&self) -> std::io::Result<()> {
-        std::fs::write(self.dump_path("hir"), self.hir_text())?;
-        Ok(())
     }
 
     pub fn write_ir(&self) -> std::io::Result<()> {
@@ -91,17 +127,40 @@ impl CompilationStages {
     }
 }
 
+pub struct GlobalPools {
+    names: SymbolsModule<FrontendSymbol>,
+    expressions: DedupPool<ASTExpression>,
+    statements: DedupPool<ASTStatement>,
+    types: DedupPool<Type>,
+}
+impl Default for GlobalPools {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl GlobalPools {
+    pub fn new() -> Self {
+        Self {
+            names: SymbolsModule::new(),
+            expressions: DedupPool::new(),
+            statements: DedupPool::new(),
+            types: DedupPool::new(),
+        }
+    }
+}
+
 ///Context that will have all the information needed when erroring or retrieving metadata about the code itself during compilation.
 ///For example, this can be used when erroring to retrieve the correct line where the file errored
 pub struct SlynxContext {
-    ///The source code of the files. Maps the name of some to it's source code. Can and is used when importing contents(will be implemented yet)
-    files: HashMap<Arc<PathBuf>, String>,
-    ///Maps the name of some file to it's lines. Used when wanting to retrieve for example, returning the lines where an error occuried
-    lines: HashMap<Arc<PathBuf>, Vec<usize>>,
+    ///The source code of the files and their lines. Maps the name of some to its source code and its lines. Can and is used when importing contents(will be implemented yet)
+    files: FilesProvider,
+
     entry_point: Arc<PathBuf>,
+    std: PathBuf,
+    pools: GlobalPools,
 }
 
-pub struct LineInfo<'a> {
+pub struct LineInfo {
     ///The line where the error occuried
     pub line: usize,
     ///The initial column on that line
@@ -109,54 +168,67 @@ pub struct LineInfo<'a> {
     ///The final column on that line
     pub column_end: usize,
     ///The source that generated that error
-    pub src: &'a str,
+    pub src: String,
 }
 
 impl SlynxContext {
-    pub fn new(entry_point: PathBuf) -> std::io::Result<Self> {
+    pub fn std_dir(std_path: Option<PathBuf>) -> PathBuf {
+        if let Some(std) = std_path {
+            std
+        } else if let Ok(path) = std::env::var("STD_PATH") {
+            PathBuf::from(path)
+        } else {
+            std::env::home_dir()
+                .expect("Expected to have home dir")
+                .join(".slynx")
+                .join("std")
+        }
+    }
+
+    pub fn new(entry_point: PathBuf, std_path: Option<PathBuf>) -> std::io::Result<Self> {
         let entry_point = Arc::new(entry_point);
         let mut out = Self {
-            files: HashMap::new(),
-            lines: HashMap::new(),
+            files: FilesProvider::new(),
             entry_point: entry_point.clone(),
+            std: Self::std_dir(std_path),
+            pools: GlobalPools::new(),
         };
-        out.insert_file(entry_point)?;
+        out.insert_file(&entry_point)?;
         Ok(out)
     }
 
-    pub fn from_source(src: String) -> Self {
-        let entry = Arc::new(PathBuf::new());
-        let lines = src
-            .chars()
-            .enumerate()
-            .filter_map(|(idx, c)| if c == '\n' { Some(idx) } else { None })
-            .collect::<Vec<_>>();
+    pub fn from_source(src: String, root: &Path) -> Self {
+        let entry = Arc::new(root.into());
+        let provider = FilesProvider::new();
+        provider.insert(root, src);
+
         Self {
-            files: HashMap::from([(entry.clone(), src)]),
-            lines: HashMap::from([(entry.clone(), lines)]),
+            files: provider,
             entry_point: entry,
+            std: Self::std_dir(None),
+            pools: GlobalPools::new(),
         }
     }
 
     ///Gets the source code of the file that will start all the compilation
-    pub fn get_entry_point_source(&self) -> &str {
+    pub fn get_entry_point_source(&self) -> String {
         self.files
             .get(&self.entry_point)
             .expect("Entry point should map to a file")
+            .0
+            .clone()
     }
 
     ///Inserts the file with provided `path` if it exists.
-    pub fn insert_file(&mut self, path: Arc<PathBuf>) -> std::io::Result<()> {
-        let file = std::fs::read_to_string(path.as_path())?;
-        let lines = file
-            .chars()
-            .enumerate()
-            .filter_map(|(idx, c)| if c == '\n' { Some(idx) } else { None })
-            .collect::<Vec<_>>();
-
-        self.files.insert(path.clone(), file);
-        self.lines.insert(path, lines);
+    pub fn insert_file(&mut self, path: &Path) -> std::io::Result<()> {
+        self.files.read(path)?;
         Ok(())
+    }
+
+    ///Registers a file that was already loaded by the source loader.
+    ///Computes line metadata from the provided source without re-reading from disk.
+    pub fn register_loaded_file(&self, path: Arc<PathBuf>, source: String) {
+        self.files.insert(&path, source);
     }
 
     fn char_index_to_byte_offset(source: &str, char_index: usize) -> usize {
@@ -180,21 +252,18 @@ impl SlynxContext {
 
     ///Based on the provided `index`, which is the index of a char on the source code of `path`, returns the line where it's located on the file of the provided `path`.
     ///This will return its line and the column and the line containing the error
-    pub fn get_line_info<'a>(&'a self, path: &Arc<PathBuf>, index: usize) -> LineInfo<'a> {
-        let lines = self
-            .lines
-            .get(path)
-            .expect("Path should be provided on the context");
-        let source = self
+    pub fn get_line_info(&self, path: &Arc<PathBuf>, index: usize) -> LineInfo {
+        let guard = self
             .files
             .get(path)
             .expect("Path should be provided on the context");
+        let (source, lines) = guard.value();
         if source.is_empty() {
             return LineInfo {
                 line: 1,
                 column_start: 1,
                 column_end: 1,
-                src: "",
+                src: "".into(),
             };
         }
 
@@ -203,27 +272,26 @@ impl SlynxContext {
         let line_idx = match lines.binary_search(&clamped_index) {
             Ok(line) | Err(line) => line,
         };
-
-        let line_start_char = if line_idx == 0 {
-            0
-        } else {
-            lines[line_idx - 1] + 1
-        };
         let line_end_char = if line_idx < lines.len() {
             lines[line_idx]
         } else {
             char_len
         };
+        let line_start_char = if line_idx == 0 {
+            0
+        } else {
+            line_end_char.min(lines[line_idx - 1] + 1)
+        };
 
         let start = Self::char_index_to_byte_offset(source, line_start_char);
         let end = Self::char_index_to_byte_offset(source, line_end_char);
-        let column = clamped_index.saturating_sub(line_start_char) + 1;
+        let column = end.min(clamped_index.saturating_sub(line_start_char) + 1);
 
         LineInfo {
             line: line_idx + 1,
             column_start: column,
             column_end: end,
-            src: &source[start..end],
+            src: source[start..end].to_string(),
         }
     }
 
@@ -234,53 +302,106 @@ impl SlynxContext {
 
     ///Builds the token stream to be used by the Parser from the source code
     pub fn build_tokens(&self) -> Result<TokenStream, SlynxError> {
-        Lexer::tokenize(self.get_entry_point_source()).map_err(|e| self.handle_lexer_error(e))
+        Lexer::tokenize(&self.get_entry_point_source()).map_err(|e| self.handle_lexer_error(e))
     }
 
     ///Builds the Slynx AST from the given `tokens` stream.
-    pub fn build_parser(&self, tokens: TokenStream) -> Result<Vec<ASTDeclaration>, SlynxError> {
-        Parser::new(tokens)
-            .parse_declarations()
-            .map_err(|e| self.handle_parser_error(&e))
+    pub fn build_parser(&self, tokens: TokenStream) -> Result<Program, SlynxError> {
+        Parser::new(
+            tokens,
+            &self.pools.names,
+            &self.pools.expressions,
+            &self.pools.statements,
+            &self.pools.types,
+        )
+        .parse_declarations()
+        .map_err(|e| self.handle_parser_error(&e))
+    }
+
+    pub fn load_modules<'a>(&'a self) -> Result<Modules<'a>, SlynxError> {
+        let loader = SourceLoader::new(
+            &self.pools.names,
+            &self.pools.statements,
+            &self.pools.expressions,
+            &self.pools.types,
+        );
+
+        let std = self.std.clone();
+        let entry = (*self.entry_point).clone();
+        let mut on_load = |path: &Path, source: &str| {
+            self.register_loaded_file(Arc::new(path.to_path_buf()), source.to_string());
+        };
+        let modules = { loader.load(entry, std, &mut on_load, &self.files) };
+        match modules {
+            Ok(modules) => Ok(modules),
+            Err(e) => Err(self.handle_source_error(&e)),
+        }
     }
 
     ///Builds the Slynx HIR from the given `ast`. And type checks the HIR. The result hir is already typed. Also returns the types module to be used if needed to get information about the types on the Hir.
-    pub fn build_hir(&self, ast: &[ASTDeclaration]) -> Result<SlynxHir, SlynxError> {
-        let mut hir = SlynxHir::new();
-        hir.generate(ast)
-            .map_err(|e| self.handle_hir_error(&hir, &e))?;
-        hir = TypeChecker::check(hir).map_err(|e| self.handle_checker_error(&e))?;
+    pub fn build_hir<'a>(
+        &self,
+        ast: &'a Modules,
+    ) -> Result<(SlynxHir<'a>, HashSet<AnyDeclarationId>, OwnershipAnalysis), SlynxError> {
+        let mut hir = SlynxHir::new(ast).map_err(|e| self.handle_hir_error(&e.0, &e.1))?;
 
-        self.monomorphize(&mut hir)?;
+        let deadcode = self.monomorphize(&mut hir)?;
 
-        Ok(hir)
+        // Run ownership analysis (move semantics + borrow checking)
+        let ownership = OwnershipAnalysis::analyze(&hir);
+        if let Some(first_error) = ownership.errors.first() {
+            return Err(self.handle_ownership_error(&hir, first_error));
+        }
+
+        Ok((hir, deadcode, ownership))
     }
 
     ///Monomorphization only changes(by now) the types module.
-    pub fn monomorphize(&self, hir: &mut SlynxHir) -> Result<(), SlynxError> {
+    pub fn monomorphize(
+        &self,
+        hir: &mut SlynxHir,
+    ) -> Result<HashSet<AnyDeclarationId>, SlynxError> {
         Monomorphizer::resolve(hir).map_err(|e| self.handle_hir_error(hir, &e))
     }
 
     ///Builds a new IR from the given `hir`. It's assumed that it is already implemented
-    pub fn build_ir(&self, hir: SlynxHir) -> Result<SlynxIR, SlynxError> {
-        let variables = hir.modules.symbols_resolver.variables().clone();
-
+    pub fn build_ir(
+        &self,
+        hir: SlynxHir,
+        deadcode: HashSet<AnyDeclarationId>,
+        ownership: OwnershipAnalysis,
+    ) -> Result<SlynxIR, SlynxError> {
         let mut codegen = Codegen::new();
-        codegen.generate(&hir).map_err(|e| {
-            self.build_ir_generation_error(&e, &variables, &hir, &hir.modules.declarations_module)
-        })
+        codegen
+            .generate(&hir, deadcode, ownership)
+            .map_err(|e| self.build_ir_generation_error(&e, &hir))
     }
 
     ///Builds typed HIR and IR once so callers can inspect or persist intermediate dumps
     ///before materializing the default `.sir` output.
     pub fn build_stages(self) -> Result<CompilationStages, SlynxError> {
-        let stream = self.build_tokens()?;
-        let decls = self.build_parser(stream)?;
-        let hir = self.build_hir(&decls)?;
-        let dump = format_hir_dump(&hir);
-        let ir = self.build_ir(hir)?;
+        let entry = (*self.entry_point).clone();
+        let modules = {
+            let std = self.std.clone();
+            let on_load = |path: &Path, source: &str| {
+                self.register_loaded_file(Arc::new(path.to_path_buf()), source.to_string());
+            };
+            let source = SourceLoader::new(
+                &self.pools.names,
+                &self.pools.statements,
+                &self.pools.expressions,
+                &self.pools.types,
+            );
+            source.load(entry, std, on_load, &self.files)
+        };
+        let modules = match modules {
+            Ok(modules) => modules,
+            Err(e) => return Err(self.handle_source_error(&e)),
+        };
+        let (hir, deadcode, ownership) = self.build_hir(&modules)?;
+        let ir = self.build_ir(hir, deadcode, ownership)?;
 
-        Ok(CompilationStages::new(self.entry_point.as_ref(), dump, ir))
+        Ok(CompilationStages::new(self.entry_point.as_ref(), ir))
     }
 
     ///Compiles the code from the current contexts and returns the compilation result including the IR
@@ -290,66 +411,11 @@ impl SlynxContext {
     }
 }
 
-fn format_hir_dump(hir: &SlynxHir) -> String {
-    format!(
-        "HIR Declarations:\n{:#?}\n\nDeclarations Module:\n{:#?}\n\nVariable Names:\n{:#?}",
-        hir.declarations,
-        hir.modules.types_module,
-        hir.modules.symbols_resolver.variables()
-    )
-}
-
-fn format_ir_generation_error(
-    error: &CodegenError,
-    variable_names: &HashMap<VariableId, SymbolPointer<SlynxHir>>,
-    hir: &SlynxHir,
-    declarations_module: &DeclarationsModule,
-) -> String {
-    match error {
-        CodegenError::UnrecognizedVariable(id) => {
-            if let Some(name) = variable_names
-                .get(id)
-                .copied()
-                .map(|symbol| hir.get_name(symbol))
-            {
-                format!("IR internal error: variable '{name}' is not recognized by the IR")
-            } else {
-                format!(
-                    "IR internal error: variable id {} is not recognized by the IR",
-                    id.as_raw()
-                )
-            }
-        }
-        CodegenError::DeclarationNotRecognized(id) => {
-            let name = hir.get_name_of_type(declarations_module.get_declaration_type(*id));
-            name.map(|symbol| hir.get_name(symbol))
-                .unwrap_or("Unrecognized Declaration? This is a bug")
-                .to_string()
-        }
-        CodegenError::IRTypeNotRecognized(id) => {
-            if let Some(name) = hir.get_name_of_type(*id).map(|symbol| hir.get_name(symbol)) {
-                format!("IR internal error: type '{name}' is not recognized by the IR")
-            } else {
-                format!(
-                    "IR internal error: type id {} is not recognized by the IR",
-                    id.as_raw()
-                )
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::SlynxContext;
-    use super::format_ir_generation_error;
-
-    use slynx_codegen::CodegenError;
-    use slynx_hir::SlynxHir;
-    use slynx_hir::{VariableId, model::HirType, modules::DeclarationsModule};
 
     use std::{
-        collections::HashMap,
         fs,
         path::PathBuf,
         sync::Arc,
@@ -372,70 +438,10 @@ mod tests {
         fs::write(path.as_ref(), source).expect("temp source should be written");
 
         (
-            SlynxContext::new((*path).clone()).expect("context should be created"),
+            SlynxContext::new((*path).clone(), None).expect("context should be created"),
             path,
             dir,
         )
-    }
-
-    #[test]
-    fn formats_variable_ir_errors_with_source_names() {
-        let hir = SlynxHir::new();
-        let variable_names = HashMap::new();
-        let declarations = DeclarationsModule::new();
-        let variable = VariableId::from_raw(77);
-
-        assert_eq!(
-            format_ir_generation_error(
-                &CodegenError::UnrecognizedVariable(variable),
-                &variable_names,
-                &hir,
-                &declarations
-            ),
-            "IR internal error: variable id 77 is not recognized by the IR"
-        );
-    }
-
-    #[test]
-    fn formats_declaration_ir_errors_with_source_names() {
-        let mut hir = SlynxHir::new();
-        let declaration_name = hir.intern_name("Bordered");
-
-        let variable_names = HashMap::new();
-        let mut declarations = DeclarationsModule::new();
-
-        let ty = hir.create_type(declaration_name, HirType::Component { props: Vec::new() });
-        let declaration = declarations.create_declaration(declaration_name, ty);
-
-        assert_ne!(
-            format_ir_generation_error(
-                &CodegenError::DeclarationNotRecognized(declaration),
-                &variable_names,
-                &hir,
-                &declarations
-            ),
-            "IR internal error: declaration 'Bordered' is not recognized by the IR"
-        );
-    }
-
-    #[test]
-    fn formats_type_ir_errors_with_source_names() {
-        let mut hir = SlynxHir::new();
-        let type_name = hir.intern_name("User");
-        let variable_names = HashMap::new();
-        let declarations = DeclarationsModule::new();
-
-        let ty = hir.create_type(type_name, HirType::Struct { fields: Vec::new() });
-
-        assert_eq!(
-            format_ir_generation_error(
-                &CodegenError::IRTypeNotRecognized(ty),
-                &variable_names,
-                &hir,
-                &declarations
-            ),
-            "IR internal error: type 'User' is not recognized by the IR"
-        );
     }
 
     #[test]

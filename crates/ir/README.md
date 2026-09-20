@@ -359,6 +359,8 @@ SpecializedComponent {
   style: A()
 }```
 generates a call for the function that applies the struct `A` on that given `SpecializedComponent`. It is being explained on the [stylesheet lowering](./docs/stylesheet-lowering.md)
+Sapply operations are dumb, extremely dumb, so the arguments of them MUST be primitives only, and the backend should know how to lower things properly. This is made like this to keep it able for the frontend to be free on how to implement its abstraction
+over something.
 
 ### UI Operations
 Anything on the IR that initializes with '@' and is being used as an instruction, is an specific UI Operation, which determine what the UI itself should do. If being used as a value, then it's the visual reference to a handle of some internal string
@@ -386,8 +388,9 @@ The `@emit p0, %count` on the function, tells that `p0` should execute its `%cou
 
 * allocate: Allocates a variable with a given type. Follows `allocate ty`. This does not mean that the value must be allocated anywhere by the backend, just that this is what in the language is the so called 'variable'. This returns a handle 
 * write: Writes on the provided value. Follow `write ty, handle, value`, the type of the `handle` must be the same as the `ty` and `value`. The handle can be casted, and so written in a different manner
-* read: Reads the provided value as the provided `ty`. Follows `read ty, handle`..
-* reinterpret: Creates a new slot based on the provided one, reinterpreted with the given ty. Follows `reinterpret, ty, slot`. 
+* cast: Casts the provided value as the provided `ty`. Follows `read ty, handle`.. This instruction does copy the value from `handle` but reinterprets it as the new type `ty`. For cases such as reinterpreting u8* as i8*.  
+* copy: Copies the provided value. Follows `copy handle`. The resultant type is the type of the `handle`.
+* move: Moves the provided value. Follows `move handle`. The resultant type is the type of the `handle`. NOTE: This will NOT check if the moved value stopped being used. The IR is idealized to be dumb, so this is a thing frontend must do.
 
 #### Termination Operations
 
@@ -399,7 +402,7 @@ The `@emit p0, %count` on the function, tells that `p0` should execute its `%cou
 By default on the IR everything is moved, due to DOD, so to consume something that is not intended to be moved, we copy it via `copy` instruction.
 
 * copy: copies the provided `value`. It follows as `copy value`.
-* call: which follows: `call f, arg1, arg2, ...`, calls the provided function `f` passing `arg1`, `arg2`, ..., as parameters to it. A call is an expression. A shortcut for it is simply `f(arg1,arg2,arg3)`, such as a normal function call
+* call: which follows: `call f, arg1, arg2, ...`, calls the provided function `f` passing `arg1`, `arg2`, ..., as parameters to it. A call is an expression. A shortcut for it is simply `f(arg1,arg2,arg3)`, such as a normal function call. The type of this operation is the return type of 'f'. Its implicit
 * cast: which follows: `cast ty, value` casts the provided `value`, copies the value and casts it to the provided `ty`
 * select: which follows `select cond, v1, v2`, selects `v1` if `cond` is `true` and `v2` otherwise
 
@@ -445,5 +448,17 @@ Saturing addition:
 * cmplte, compares the first value to the second one, and returns `true` if the first is less than or equal to the second one, and `false` otherwise
 * cmpne, compares the first value to the second one, and returns `true` if they're not equal, and `false` otherwise
 * negate, negates the provided value. If it's true, returns false, otherwise, returns true
+
+
+### Dynamic Operations
+
+Dynamic operations are operations that don't know exactly how something behaviors, for example, a method call for a value whose type is extern.
+In general, dynamic operations are meant for types that you cannot know anything about their layout or how a call for them works. For example on compiling a struct that came from js, we cannot know the exact method co call,
+or the exact property, since slynx is position based. So instead of emitting a positional field operation, a dynamic one is used to get based on the name, and then the backend should be able to know how to handle it.
+
+* dynget: which follows `dynget ty, %target, "field"`, stands for 'dynamic get' and gets the given `field` on the given `value` dynamically. This is intendeed only for backends whose layout is unknown and the usage of positional instruction such `propget` is not possible
+* dynset: which follows `dynset ty, %target, "field", %value`, stands for 'dynamic set', and sets the given `value` on the `target`'s "field". Only intendeed for backends whose layout is unknown
+* dyncall: which follows `dyncall, rety, %target, "methodname", %arg0, %arg1` calls the given `methodname` on `%target` with the given args. The `rety` is the return type of the method call.
+
 #### Idealized For The Future
 These operations are idealized to be implemented on the future and for the V1 are not being implemented. Note that since these are only IDEALIZED, they might and probably WILL change

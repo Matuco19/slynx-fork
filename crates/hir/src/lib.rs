@@ -24,26 +24,10 @@
 //!
 //! # Quick Start
 //!
-//! ```rust
-//! use crate::hir::SlynxHir;
-//! use common::ast::ASTDeclaration;
-//!
-//! // Create a new HIR instance
-//! let mut hir = SlynxHir::new();
-//!
-//! // Transform AST declarations into HIR
-//! let ast: Vec<ASTDeclaration> = /* parsed AST */;
-//! hir.generate(ast)?;
-//!
-//! // Access the resulting HIR
-//! for decl in &hir.declarations {
-//!     match &decl.kind {
-//!         HirDeclarationKind::Function { name, .. } => {
-//!             println!("Function: {}", hir.names.symbol_name(name));
-//!         }
-//!         _ => {}
-//!     }
-//! }
+//! ```text
+//! // Parse source files into an AST with the parser, then generate the HIR:
+//! let mut hir = SlynxHir::new(&modules)?;
+//! // hir.files contains the full HIR for every compiled file.
 //! ```
 //!
 //! # Type System
@@ -67,37 +51,49 @@
 //! - [`HIRErrorKind::NotAFunction`] — Call of non-function value
 //! - [`HIRErrorKind::MissingProperty`] — Missing required object fields
 
-#![warn(rustdoc::broken_intra_doc_links)]
+mod builders;
+pub use builders::*;
+/// Scope, symbol, type, and declaration management modules.
+pub mod context;
 
-mod components;
-mod declarations;
 /// HIR error types and diagnostic information.
 pub mod error;
-mod expression;
+/// Name resolution utilities.
+mod file;
+/// Shared generic-related infrastructure.
+pub mod generics;
 mod helpers;
 /// Unique ID types for HIR elements.
 pub mod id;
 pub mod model;
-/// Scope, symbol, type, and declaration management modules.
-pub mod modules;
-/// Name resolution utilities.
-pub mod names;
+/// Ownership analysis: move semantics, borrow checking, and place construction.
+pub mod ownership;
 mod queries;
-mod statements;
+
+use std::ops::{Deref, Index};
 
 pub use crate::error::{HIRError, HIRErrorKind};
-use crate::modules::HirModules;
-use slynx_parser::{ASTDeclaration, ASTDeclarationKind};
+use crate::{
+    context::{LangItems, SymbolRegistry, TypesContext},
+    file::HirFile,
+};
+use common::{
+    FrontendSymbol, SymbolsModule,
+    pool::{Pool, PoolId},
+};
+use dashmap::{DashMap, mapref::one::RefMut};
+pub use helpers::{HirViewer, Visible};
 
-pub use id::{DeclarationId, ExpressionId, PropertyId, TypeId, VariableId};
+pub use id::{ComponentId, DeclarationId, ExpressionId, VariableId};
 pub use model::*;
+use module_loader::{FileId, Modules};
 
 /// Result type for HIR operations.
 ///
 /// This is the standard result type used throughout the HIR module, wrapping
 /// successful values or [`HIRError`] instances with detailed diagnostic information.
 pub type Result<T> = std::result::Result<T, HIRError>;
-pub type SymbolPointer = common::SymbolPointer<SlynxHir>;
+pub type SymbolPointer = common::SymbolPointer<FrontendSymbol>;
 
 /// The main HIR structure coordinating high-level intermediate representation.
 ///
@@ -126,23 +122,9 @@ pub type SymbolPointer = common::SymbolPointer<SlynxHir>;
 ///
 /// # Example
 ///
-/// ```rust
-/// # use slynx_frontend::hir::{SlynxHir, Result};
-/// # use common::ast::{ASTDeclaration, ASTDeclarationKind, GenericIdentifier, Span};
-/// # fn example() -> Result<()> {
-/// let mut hir = SlynxHir::new();
-///
-/// // The HIR is populated by generating from AST
-/// let ast: Vec<ASTDeclaration> = vec![
-///     // Your parsed declarations here
-/// ];
-///
-/// hir.generate(ast)?;
-///
-/// // Now hir.declarations contains the full HIR
-/// assert!(!hir.declarations.is_empty());
-/// # Ok(())
-/// # }
+/// ```text
+/// let hir = SlynxHir::new(&modules)?;
+/// // hir.files contains the full HIR generated from the parsed modules.
 /// ```
 ///
 /// # See Also
@@ -150,16 +132,22 @@ pub type SymbolPointer = common::SymbolPointer<SlynxHir>;
 /// - [`generate`](SlynxHir::generate) — Main entry point for AST → HIR transformation
 /// - [`model`] module — HIR data structures
 /// - [`modules::HirModules`] — Scopes and symbol management
-#[derive(Debug, Default)]
-pub struct SlynxHir {
-    /// Manages all modules, scopes, symbols, and type information.
-    ///
-    /// This is the primary interface for working with the HIR's namespace and
-    /// type system. It provides methods for creating variables, looking up
-    /// declarations, and managing nested scopes.
-    pub modules: HirModules,
 
-    /// All top-level declarations generated from the source.
+#[derive(Debug)]
+pub struct SlynxHir<'a> {
+    /// Resolver for interning and looking up symbol names.
+    pub symbols_resolver: &'a SymbolsModule<FrontendSymbol>,
+    pub symbols_registry: SymbolRegistry,
+    /// Module managing all types and their IDs.
+    pub types_module: TypesContext,
+    pub expressions: Pool<HirExpression>,
+    pub statements: Pool<HirStatement>,
+    pub component_expressions: Pool<HirComponentExpression>,
+    /// Pool of places constructed during ownership analysis.
+    pub places: Pool<HirPlace>,
+    /// Mapping from VariableId to its source name, populated during HIR construction.
+    pub variable_names: DashMap<VariableId, SymbolPointer>,
+    /// All top-level declarations generated from the sources.
     ///
     /// This vector contains every function, component, object, and type alias
     /// defined in the source code, in the order they were processed.
@@ -169,10 +157,11 @@ pub struct SlynxHir {
     /// - Its [`HirDeclarationKind`] describing what kind of declaration it is
     /// - The declaration's [`TypeId`]
     /// - The source [`Span`] for error reporting
-    pub declarations: Vec<HirDeclaration>,
+    pub files: DashMap<FileId, HirFile>,
+    pub lang_items: LangItems,
 }
 
-impl SlynxHir {
+impl<'a> SlynxHir<'a> {
     /// Creates a new, empty `SlynxHir` instance.
     ///
     /// The returned instance has no declarations and an initialized module
@@ -180,10 +169,9 @@ impl SlynxHir {
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// # use slynx_frontend::hir::SlynxHir;
-    /// let hir = SlynxHir::new();
-    /// assert!(hir.declarations.is_empty());
+    /// ```text
+    /// let hir = SlynxHir::new(&modules)?;
+    /// // The HIR is empty until modules are generated into it.
     /// ```
     ///
     /// # See Also
@@ -191,261 +179,78 @@ impl SlynxHir {
     /// - [`generate`](SlynxHir::generate) — Populate the HIR from AST
     /// - [`modules::HirModules::new`](crate::hir::modules::HirModules::new)
     #[inline]
-    pub fn new() -> Self {
-        Self {
-            modules: HirModules::new(),
-            declarations: Vec::new(),
+    #[allow(clippy::result_large_err)]
+    pub fn new(modules: &'a Modules<'a>) -> std::result::Result<Self, (Self, HIRError)> {
+        let out = Self {
+            expressions: Pool::new(),
+            statements: Pool::new(),
+            component_expressions: Pool::new(),
+            places: Pool::new(),
+            variable_names: DashMap::new(),
+            symbols_registry: SymbolRegistry::default(),
+            symbols_resolver: modules.symbols(),
+            types_module: TypesContext::new(),
+            files: DashMap::new(),
+            lang_items: LangItems::new(),
+        };
+        if let Err(e) = out.generate(modules) {
+            Err((out, e))
+        } else {
+            Ok(out)
         }
     }
 
-    /// Generates HIR declarations from the provided AST declarations.
-    ///
-    /// This is the primary entry point for transforming source code into the
-    /// high-level intermediate representation. The process occurs in two phases:
-    ///
-    /// ## Phase 1: Hoisting
-    ///
-    /// Each declaration is hoisted to register it in the appropriate scope before
-    /// its body is resolved. This allows forward references within the same
-    /// scope. For example:
-    ///
-    /// ```slynx
-    /// func later() { earlier(); }  // Valid: earlier is hoisted
-    /// func earlier() { }
-    /// ```
-    ///
-    /// During hoisting:
-    /// - Functions are registered with their signatures
-    /// - Components have their property layouts established
-    /// - Objects declare their field structure
-    /// - Type aliases create name → type mappings
-    ///
-    /// ## Phase 2: Resolution
-    ///
-    /// The bodies of declarations are processed to:
-    /// - Type-check expressions and statements
-    /// - Resolve variable and function references
-    /// - Validate field accesses and method calls
-    /// - Build the complete HIR representation
-    ///
-    /// # Arguments
-    ///
-    /// * `ast` — A vector of AST declarations to transform into HIR
-    ///
-    /// # Returns
-    ///
-    /// * [`Ok(())`] — HIR generation succeeded
-    /// * [`Err(HIRError)`] — A semantic error was encountered
-    ///
-    /// # Errors
-    ///
-    /// This function can return various [`HIRError`] kinds, including:
-    ///
-    /// - [`NameNotRecognized`] — Reference to undefined identifier
-    /// - [`PropertyNotRecognized`] — Invalid field access on object/component
-    /// - [`NotAFunction`] — Attempt to call a non-function value
-    /// - [`MissingProperty`] — Required object field not provided
-    /// - [`RecursiveType`] — Illegal recursive type definition
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// # use slynx_frontend::hir::{SlynxHir, Result};
-    /// # use common::ast::{ASTDeclaration, ASTDeclarationKind};
-    /// # fn process(source: Vec<ASTDeclaration>) -> Result<()> {
-    /// let mut hir = SlynxHir::new();
-    /// hir.generate(source)?;
-    ///
-    /// // HIR is now ready for analysis
-    /// for decl in &hir.declarations {
-    ///     println!("Decl: {:?}", decl.kind);
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
-    ///
-    /// # Implementation Details
-    ///
-    /// The function iterates over the AST declarations twice:
-    ///
-    /// 1. First pass (hoisting): Calls [`hoist`](SlynxHir::hoist) on each declaration
-    ///    to register it without resolving its body
-    ///
-    /// 2. Second pass (resolution): Calls [`resolve`](SlynxHir::resolve) on each
-    ///    declaration to process its full body and build HIR nodes
-    ///
-    /// This two-pass approach ensures that all names are available before any
-    /// references to them are resolved, supporting mutual recursion.
-    ///
-    /// # See Also
-    ///
-    /// - [`hoist`](SlynxHir::hoist) — Phase 1: Declaration registration
-    /// - [`resolve`](SlynxHir::resolve) — Phase 2: Body resolution
-    /// - [`modules::HirModules`] — Scope and symbol management during generation
-    pub fn generate(&mut self, ast: &[ASTDeclaration]) -> Result<()> {
-        // Phase 1: Hoist all declarations to register them in their scopes
-        for ast in ast {
-            self.hoist(ast)?;
-        }
+    ///Gets or create an Hir file with the given `id`
+    fn get_or_create_file(&self, id: FileId) -> RefMut<'_, FileId, HirFile> {
+        self.files.entry(id).or_insert_with(|| HirFile::new(id))
+    }
 
-        // Phase 2: Resolve all declaration bodies to build complete HIR
-        for ast in ast {
-            self.resolve(ast)?;
+    fn generate(&'a self, modules: &Modules) -> Result<()> {
+        let builder = HirQueueBuilder::new(self, modules);
+        {
+            let entry = &modules.entries()[0];
+            let main_symbol = self.intern_name("main");
+            if let Some(mainfunc) = entry.func().iter().find(|func| func.name == main_symbol) {
+                builder.enqueue_function(mainfunc, entry.id)?;
+                builder.process()?;
+            }
         }
-
+        builder.close_bodies();
         Ok(())
     }
+}
 
-    /// Hoists a single AST declaration, registering it in its scope without
-    /// resolving its body.
-    ///
-    /// Hoisting is the first phase of HIR generation where declarations are
-    /// made known to the type system before their implementations are processed.
-    /// This enables:
-    ///
-    /// - Forward references within the same scope
-    /// - Mutual recursion between functions
-    /// - Type-safe references to later-defined declarations
-    ///
-    /// # Arguments
-    ///
-    /// * `ast` — The AST declaration to hoist
-    ///
-    /// # Returns
-    ///
-    /// * [`Ok(())`] — Declaration was successfully registered
-    /// * [`Err(HIRError)`] — A semantic error occurred during hoisting
-    ///
-    /// # Processing by Declaration Kind
-    ///
-    /// | Declaration Kind | Hoisting Action |
-    /// |-----------------|----------------|
-    /// | [`Alias`] | Creates type alias mapping |
-    /// | [`ObjectDeclaration`] | Registers object layout with fields |
-    /// | [`FuncDeclaration`] | Registers function signature |
-    /// | [`ComponentDeclaration`] | Registers component with property types |
-    ///
-    /// # Errors
-    ///
-    /// - [`RecursiveType`] — Object field references its own type
-    /// - [`NameAlreadyDefined`] — Duplicate declaration in same scope
-    ///
-    /// # Note
-    ///
-    /// This method is called during the first pass of [`generate`](SlynxHir::generate).
-    /// It does not process function bodies, component children, or expression
-    /// details — those are handled during the resolution phase.
-    ///
-    /// # See Also
-    ///
-    /// - [`generate`](SlynxHir::generate) — Main entry point (calls this in phase 1)
-    /// - [`resolve`](SlynxHir::resolve) — Phase 2: Body resolution
-    /// - [`implementation::declarations::hoist_function`](crate::hir::implementation::declarations::hoist_function)
-    fn hoist(&mut self, ast: &ASTDeclaration) -> Result<()> {
-        match &ast.kind {
-            ASTDeclarationKind::StyleSheet { name, args, .. } => {
-                self.hoist_stylesheet(&name.identifier, args)
-            }
-            ASTDeclarationKind::Alias { name, target } => {
-                self.modules
-                    .create_alias(&target.identifier, &name.identifier);
-            }
-            ASTDeclarationKind::ObjectDeclaration { name, fields } => {
-                self.modules.create_object(&name.identifier, fields)
-            }
-
-            ASTDeclarationKind::FuncDeclaration { name, args, .. } => {
-                self.hoist_function(name, args)?
-            }
-            ASTDeclarationKind::ComponentDeclaration { name, members, .. } => {
-                self.hoist_component(name, members)?
-            }
-        }
-        Ok(())
+impl<'a> Deref for SlynxHir<'a> {
+    type Target = TypesContext;
+    fn deref(&self) -> &Self::Target {
+        &self.types_module
     }
+}
 
-    /// Resolves an AST declaration, processing its full body to build HIR nodes.
-    ///
-    /// Resolution is the second phase of HIR generation where the actual
-    /// implementation details are processed. This includes:
-    ///
-    /// - Type-checking all expressions
-    /// - Resolving variable and function references
-    /// - Building [`HirExpression`] and [`HirStatement`] nodes
-    /// - Validating field accesses and type correctness
-    ///
-    /// # Arguments
-    ///
-    /// * `ast` — The AST declaration to resolve (consumed)
-    ///
-    /// # Returns
-    ///
-    /// * [`Ok(())`] — Declaration was successfully resolved and added to [`declarations`](SlynxHir::declarations)
-    /// * [`Err(HIRError)`] — A type error or semantic error was encountered
-    ///
-    /// # Processing by Declaration Kind
-    ///
-    /// | Declaration Kind | Resolution Action |
-    /// |-----------------|-------------------|
-    /// | [`ObjectDeclaration`] | Validates field types and records object structure |
-    /// | [`FuncDeclaration`] | Processes body statements, resolves expressions, handles implicit returns |
-    /// | [`ComponentDeclaration`] | Resolves child members and property initializers |
-    /// | [`Alias`] | Links alias name to target type |
-    ///
-    /// # Errors
-    ///
-    /// Resolution can fail with various [`HIRErrorKind`] values, including:
-    ///
-    /// - [`TypeNotRecognized`] — Unknown type name
-    /// - [`NotAFunction`] — Call to non-function value
-    /// - [`PropertyNotRecognized`] — Invalid field or property access
-    /// - [`InvalidFuncallArgLength`] — Wrong number of function arguments
-    ///
-    /// # Implementation Details
-    ///
-    /// For functions and components, this method:
-    ///
-    /// 1. Enters a new scope for local variables
-    /// 2. Processes parameters to create variable bindings
-    /// 3. Resolves all statements in the body
-    /// 4. Handles implicit returns (last expression in function body)
-    /// 5. Exits the scope and records the declaration
-    ///
-    /// # Note
-    ///
-    /// This method is called during the second pass of [`generate`](SlynxHir::generate).
-    /// All names should already be registered via [`hoist`](SlynxHir::hoist).
-    ///
-    /// # See Also
-    ///
-    /// - [`generate`](SlynxHir::generate) — Main entry point (calls this in phase 2)
-    /// - [`hoist`](SlynxHir::hoist) — Phase 1: Declaration registration
-    /// - [`implementation::declarations::resolve_function`](crate::hir::implementation::declarations::resolve_function)
-    fn resolve(&mut self, ast: &ASTDeclaration) -> Result<()> {
-        match &ast.kind {
-            ASTDeclarationKind::ObjectDeclaration { name, fields, .. } => {
-                self.resolve_object(name, fields, ast.span)
-            }
-            ASTDeclarationKind::FuncDeclaration {
-                name,
-                args,
-                body,
-                return_type,
-            } => self.resolve_function(name, args, return_type, body, &ast.span),
-            ASTDeclarationKind::ComponentDeclaration { members, name } => {
-                self.resolve_component_declaration(members, name, ast.span)
-            }
+impl Index<PoolId<HirExpression>> for SlynxHir<'_> {
+    type Output = HirExpression;
+    fn index(&self, index: PoolId<HirExpression>) -> &Self::Output {
+        &self.expressions[index]
+    }
+}
 
-            ASTDeclarationKind::Alias { name, target } => {
-                self.resolve_alias(name, target, ast.span)
-            }
+impl Index<PoolId<HirStatement>> for SlynxHir<'_> {
+    type Output = HirStatement;
+    fn index(&self, index: PoolId<HirStatement>) -> &Self::Output {
+        &self.statements[index]
+    }
+}
 
-            ASTDeclarationKind::StyleSheet {
-                name,
-                args,
-                usages,
-                body,
-            } => self.resolve_stylesheet(name, args, usages, body, ast.span),
-        }
+impl Index<PoolId<HirComponentExpression>> for SlynxHir<'_> {
+    type Output = HirComponentExpression;
+    fn index(&self, index: PoolId<HirComponentExpression>) -> &Self::Output {
+        &self.component_expressions[index]
+    }
+}
+
+impl Index<PoolId<HirPlace>> for SlynxHir<'_> {
+    type Output = HirPlace;
+    fn index(&self, index: PoolId<HirPlace>) -> &Self::Output {
+        &self.places[index]
     }
 }

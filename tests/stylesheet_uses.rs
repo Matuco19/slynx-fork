@@ -1,15 +1,9 @@
 use std::path::PathBuf;
+mod common;
 
 /// Compiles a single .slx file and expects success.
 fn compile_slx(path: PathBuf) {
-    let result = slynx::compile_to_ir(path.clone());
-    println!(
-        "{}",
-        result
-            .as_ref()
-            .map(|s| s.format_sir())
-            .unwrap_or("error".to_string())
-    );
+    let result = slynx::compile_to_ir(path.clone(), Some(common::STD_PATH.clone()));
     assert!(
         result.is_ok(),
         "compilation failed for {}:\n{:?}",
@@ -30,7 +24,6 @@ fn all_stylesheet_uses() {
 
     for entry in &entries {
         let path = entry.path();
-        println!("=== compiling {}", path.display());
         compile_slx(path);
     }
 }

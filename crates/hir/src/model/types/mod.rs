@@ -48,7 +48,7 @@ pub mod term;
 #[cfg(test)]
 mod term_tests;
 pub mod vector;
-use crate::{DeclarationId, HirFunctionDeclaration, SymbolPointer, Visible, term::TermId};
+use crate::{SymbolPointer, Visible, term::TermId};
 
 use common::{VisibilityModifier, pool::DedupPoolId};
 use smallvec::SmallVec;
@@ -145,17 +145,20 @@ pub struct StructField {
     pub ty: TermId,
     pub name: SymbolPointer,
 }
-#[derive(Debug, Hash, Clone, PartialEq, Eq)]
-pub struct StructMethod {
-    pub name: SymbolPointer,
-    pub target: DeclarationId<HirFunctionDeclaration>,
-}
 
+///The identity of a struct type.
+///
+///A struct is identified by its name and fields alone; the methods it declares
+///are *not* part of that identity. They are not stored here at all — a struct
+///lives in a `DedupPool`, which requires `Hash + Eq + Clone` and offers no
+///interior mutability, so a lazily grown method list could neither be written
+///nor be excluded from the hashed value. Methods are resolved on demand and
+///live in the type-keyed `MethodTable` instead, which covers enums and
+///components as well.
 #[derive(Debug, Hash, Clone, PartialEq, Eq)]
 pub struct StructType {
     pub(crate) name: SymbolPointer,
     pub(crate) fields: Vec<Visible<StructField>>,
-    pub(crate) methods: Vec<Visible<StructMethod>>,
 }
 
 /// A single variant of an enum type.

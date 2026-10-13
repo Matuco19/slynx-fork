@@ -2,7 +2,6 @@ use common::{Operator, Span, Spanned, pool::PoolId};
 use slynx_hir::{
     DeclarationId, HirExpression, HirExpressionKind, HirFunctionDeclaration, HirStatement,
     SymbolPointer,
-    id::{AnyDeclarationId, AnyLocalDeclarationId},
     ownership::ExpressionUse,
     term::TermId,
 };
@@ -11,7 +10,7 @@ use smallvec::{SmallVec, smallvec};
 
 use crate::{
     CodegenError, CodegenErrorKind,
-    lowerers::{LoweringState, functions::FunctionContext},
+    lowerers::{LoweringState, StaticStorage, functions::FunctionContext},
 };
 
 impl<'a> LoweringState<'a> {
@@ -330,20 +329,16 @@ impl<'a> LoweringState<'a> {
                 context.emit(Opcode::Vector, values, value_type)
             }
             HirExpressionKind::Static { id } => {
-                if let Some(ty) = self.external_statics.get(id) {
-                    let name = self.hir.get_name(self.hir.get_file(id.owner)[id.term].name);
-                    let name = context.ir().strings.intern(name);
-                    context.emit(Opcode::GlobalExtern(name), SmallVec::new(), *ty)
-                } else {
-                    let id = *self.globals.get(id).ok_or(CodegenError::new(
-                        CodegenErrorKind::DeclarationNotRecognized(AnyDeclarationId::new(
-                            id.owner,
-                            AnyLocalDeclarationId::Static(id.term),
-                        )),
-                        expr.span,
-                    ))?;
-                    let ty = context.ir().get_view(id).ty();
-                    context.emit(Opcode::Global(id), SmallVec::new(), ty)
+                match self.ensure_static(*id, context.ir())? {
+                    StaticStorage::Extern(ty) => {
+                        let name = self.hir.get_name(self.hir.get_file(id.owner)[id.term].name);
+                        let name = context.ir().strings.intern(name);
+                        context.emit(Opcode::GlobalExtern(name), SmallVec::new(), ty)
+                    }
+                    StaticStorage::Global(global) => {
+                        let ty = context.ir().get_view(global).ty();
+                        context.emit(Opcode::Global(global), SmallVec::new(), ty)
+                    }
                 }
             }
             HirExpressionKind::Tuple(vector) => self.lower_tuple_expression(vector, context)?,

@@ -54,7 +54,6 @@ mod statements;
 
 mod types;
 
-use common::pool::Pool;
 pub use declarations::*;
 pub use expression::*;
 pub use statements::*;

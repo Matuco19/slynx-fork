@@ -2,8 +2,7 @@ use common::pool::PoolId;
 use dashmap::DashMap;
 use module_loader::{ASTType, FileId, Modules};
 use slynx_parser::{
-    ASTDeclaration, EnumDeclaration, ExtendDeclaration, FuncDeclaration, InterfaceDeclaration,
-    StaticDeclaration,
+    EnumDeclaration, ExtendDeclaration, FuncDeclaration, InterfaceDeclaration, StaticDeclaration,
 };
 
 use crate::{Owned, SymbolPointer};

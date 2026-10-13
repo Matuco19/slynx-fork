@@ -15,6 +15,9 @@ use slynx_parser::{
 
 use crate::{FileId, SourceLoader, SourceNode};
 
+type ModuleFinderCallback<T> =
+    dyn Fn(&SourceNode, FileId, SymbolPointer<FrontendSymbol>) -> Option<T>;
+
 pub struct Modules<'a> {
     pub(crate) loader: SourceLoader<'a>,
     pub(crate) modules: Vec<SourceNode>,
@@ -154,7 +157,7 @@ impl<'a> Modules<'a> {
         name: SymbolPointer<FrontendSymbol>,
         requester: FileId,
         entry: FileId,
-        finder: &dyn Fn(&SourceNode, FileId, SymbolPointer<FrontendSymbol>) -> Option<T>,
+        finder: &ModuleFinderCallback<T>,
     ) -> Option<(FileId, T)> {
         let module = &self.modules[entry.as_raw() as usize];
         if let Some(v) = finder(module, requester, name) {

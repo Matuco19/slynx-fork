@@ -1,9 +1,7 @@
 use common::{Operator, Span, Spanned, pool::PoolId};
 use slynx_hir::{
     DeclarationId, HirExpression, HirExpressionKind, HirFunctionDeclaration, HirStatement,
-    SymbolPointer,
-    ownership::ExpressionUse,
-    term::TermId,
+    SymbolPointer, ownership::ExpressionUse, term::TermId,
 };
 use slynx_ir::{IRPointer, IRStorage, IRType, IRTypeId, Label, Opcode, Operand, Value};
 use smallvec::{SmallVec, smallvec};
@@ -328,19 +326,17 @@ impl<'a> LoweringState<'a> {
                 )?;
                 context.emit(Opcode::Vector, values, value_type)
             }
-            HirExpressionKind::Static { id } => {
-                match self.ensure_static(*id, context.ir())? {
-                    StaticStorage::Extern(ty) => {
-                        let name = self.hir.get_name(self.hir.get_file(id.owner)[id.term].name);
-                        let name = context.ir().strings.intern(name);
-                        context.emit(Opcode::GlobalExtern(name), SmallVec::new(), ty)
-                    }
-                    StaticStorage::Global(global) => {
-                        let ty = context.ir().get_view(global).ty();
-                        context.emit(Opcode::Global(global), SmallVec::new(), ty)
-                    }
+            HirExpressionKind::Static { id } => match self.ensure_static(*id, context.ir())? {
+                StaticStorage::Extern(ty) => {
+                    let name = self.hir.get_name(self.hir.get_file(id.owner)[id.term].name);
+                    let name = context.ir().strings.intern(name);
+                    context.emit(Opcode::GlobalExtern(name), SmallVec::new(), ty)
                 }
-            }
+                StaticStorage::Global(global) => {
+                    let ty = context.ir().get_view(global).ty();
+                    context.emit(Opcode::Global(global), SmallVec::new(), ty)
+                }
+            },
             HirExpressionKind::Tuple(vector) => self.lower_tuple_expression(vector, context)?,
             HirExpressionKind::StringLiteral(v) => {
                 let string = self.intern_to_ir(context.ir(), *v);

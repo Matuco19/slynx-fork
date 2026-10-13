@@ -1,32 +1,30 @@
 use std::fmt::Debug;
 
+use crate::{StructField, StructType, SymbolPointer, TupleType, helpers::Visible, term::TermId};
+use common::DedupPoolStorage;
 use common::{
     dedup_pooled,
     pool::{DedupPool, DedupPoolId},
 };
-
-use crate::{
-    DeclarationId, HirFunctionDeclaration, StructField, StructMethod, StructType, SymbolPointer,
-    TupleType, helpers::Visible, term::TermId,
-};
-
+use module_loader::FileId;
 dedup_pooled!(pub StructsPool {
     structs: StructType,
     tuples: TupleType,
 });
 
 impl StructsPool {
-    pub fn insert(
+    pub fn insert_struct(
         &self,
         name: SymbolPointer,
         fields: Vec<Visible<(SymbolPointer, TermId)>>,
-        methods: Vec<Visible<(SymbolPointer, DeclarationId<HirFunctionDeclaration>)>>,
+        owner: FileId,
     ) -> DedupPoolId<StructType> {
         let fields = fields
             .into_iter()
             .map(|field| {
                 Visible::new(
                     field.visibility,
+                    owner,
                     StructField {
                         name: field.data.0,
                         ty: field.data.1,
@@ -34,23 +32,11 @@ impl StructsPool {
                 )
             })
             .collect();
-        let methods = methods
-            .into_iter()
-            .map(|field| {
-                Visible::new(
-                    field.visibility,
-                    StructMethod {
-                        name: field.data.0,
-                        target: field.data.1,
-                    },
-                )
-            })
-            .collect();
 
         let s = StructType {
             name,
+            owner,
             fields,
-            methods,
         };
 
         self.structs.insert(s)

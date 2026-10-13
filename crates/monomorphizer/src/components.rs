@@ -195,6 +195,11 @@ impl Monomorphizer {
     ) -> Result<TermId> {
         let view = hir.view(comp_ty);
         let name = hir.intern_name(view.name());
+        // Read from the type, never from the caller. A component tree spans
+        // files: a child declared in an imported file keeps that file as its
+        // owner, so an owner threaded down from the root would stamp the wrong
+        // file on every descendant and let a private child leak.
+        let owner = hir.types.get_component_owner(comp_ty);
 
         let properties = view
             .props()
@@ -222,7 +227,9 @@ impl Monomorphizer {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(hir.types.create_component_type(name, properties, children))
+        Ok(hir
+            .types
+            .create_component_type(name, owner, properties, children))
     }
 
     ///Rebuilds the member list of a component declaration, substituting the

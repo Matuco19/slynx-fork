@@ -1,8 +1,7 @@
-use common::{VisibilityModifier, pool::DedupPoolId};
+use common::pool::DedupPoolId;
 
 use crate::{
-    DeclarationId, EnumType, EnumVariantType, HirFunctionDeclaration, StructField, StructMethod,
-    StructType, SymbolPointer, TupleType,
+    EnumType, EnumVariantType, StructField, StructType, SymbolPointer, TupleType,
     helpers::{HirViewer, Visible},
     term::TermId,
 };
@@ -14,25 +13,6 @@ impl HirViewer<'_, DedupPoolId<StructType>> {
 
     pub fn fields(&self) -> &[Visible<StructField>] {
         self.hir.types.get_struct_fields(self.data)
-    }
-
-    pub fn methods(&self) -> &[Visible<StructMethod>] {
-        &self.hir.types[self.data].methods
-    }
-    pub fn public_methods(&self) -> impl Iterator<Item = &Visible<StructMethod>> {
-        self.methods()
-            .iter()
-            .filter(|m| m.visibility == VisibilityModifier::Public)
-    }
-
-    pub fn method_named_as(
-        &self,
-        name: SymbolPointer,
-        visibility: VisibilityModifier,
-    ) -> Option<DeclarationId<HirFunctionDeclaration>> {
-        self.methods().iter().find_map(|m| {
-            (m.data.name == name && m.visibility == visibility).then_some(m.data.target)
-        })
     }
 }
 

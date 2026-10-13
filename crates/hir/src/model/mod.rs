@@ -54,7 +54,6 @@ mod statements;
 
 mod types;
 
-use common::pool::Pool;
 pub use declarations::*;
 pub use expression::*;
 pub use statements::*;
@@ -78,10 +77,6 @@ pub trait TypeDeclaration: HirDeclaration + Sized {
     fn generics(&self) -> &[GenericParameter];
     fn as_any_id(id: DeclarationId<Self>) -> AnyDeclarationId;
     fn name(&self) -> SymbolPointer;
-}
-
-pub trait HirDeclarationStorage<T: HirDeclaration> {
-    fn get_pool(&self) -> &Pool<T>;
 }
 
 pub trait LanguageItem: std::fmt::Debug + Sized + HirDeclaration {

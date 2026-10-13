@@ -4,7 +4,7 @@ use slynx_parser::{ASTFunction, ASTStatement, FuncDeclaration, Type, TypeContext
 
 use crate::{
     DeclarationId, HIRError, HirFunctionDeclaration, HirStatement, Owned, Result, SymbolPointer,
-    VariableId,
+    VariableId, Visible,
     attributes::process_attributes,
     builders::{
         HirQueueBuilder, PendantFunction,
@@ -43,7 +43,7 @@ impl<'a> HirQueueBuilder<'a> {
             declaration_name,
             register_as_inherent,
         }: InsertMethodDeclaration<'a, T>,
-    ) -> Result<DeclarationId<HirFunctionDeclaration>> {
+    ) -> Result<Visible<DeclarationId<HirFunctionDeclaration>>> {
         let context = TypeContext::new(method.generics().type_params());
         let lower_type = |ty: Spanned<DedupPoolId<Type>>| {
             self.lowerer
@@ -57,9 +57,26 @@ impl<'a> HirQueueBuilder<'a> {
             .collect::<Result<Vec<_>>>()?;
         let return_type = lower_type(method.return_type())?;
         let function_type = self.hir.types.create_function_type(args, return_type);
+        let method_name = method.method_name();
+
+        // A method is identified by `(owning type, method name)`, never by name
+        // alone: the same file may declare `run` on several types. The
+        // `SymbolRegistry` is keyed by `(file, symbol)` and is reserved for free
+        // functions, where that key *is* unique, so a method must never enter
+        // it — two types' `run` would collapse onto one declaration.
+        //
+        // Idempotence therefore comes from the type-keyed `MethodTable`. This
+        // runs only when a method is first resolved, so nothing is materialized
+        // ahead of a use site.
+        if register_as_inherent
+            && let Some(existing) = self.hir.types.method_of(self_type, method_name)
+        {
+            return Ok(existing);
+        }
 
         let declaration = HirFunctionDeclaration {
             name: declaration_name,
+            self_type: register_as_inherent.then_some(self_type),
             generics: self.lowerer.generic_parameters_of(
                 self,
                 method.generics(),
@@ -74,25 +91,19 @@ impl<'a> HirQueueBuilder<'a> {
             attributes: Vec::new(),
             span: method.span(),
         };
-        let make_declaration = || {
-            Ok(self
-                .hir
-                .store
-                .get_or_create_file(entry)
-                .create_function(declaration))
-        };
-        let declaration_id = if register_as_inherent {
-            self.hir
-                .symbols_registry
-                .get_or_insert_function(HirSymbol::new(entry, declaration_name), make_declaration)
-        } else {
-            make_declaration()
-        }?;
+        let visibility = declaration.visibility;
+        let declaration_id = self
+            .hir
+            .store
+            .get_or_create_file(entry)
+            .create_function(declaration);
 
         if register_as_inherent {
-            self.hir
-                .types
-                .create_method(self_type, method.method_name(), declaration_id);
+            self.hir.types.create_method(
+                self_type,
+                method_name,
+                Visible::new(visibility, entry, declaration_id),
+            );
         }
 
         if !external {
@@ -110,7 +121,7 @@ impl<'a> HirQueueBuilder<'a> {
             });
         }
 
-        Ok(declaration_id)
+        Ok(Visible::new(visibility, entry, declaration_id))
     }
 
     ///Hoists the given function, and then enqueues it so its body can be checked. Off being processed, this function might generate more than simply the given `f` function since it will generate all the dependencies of `f` to work. Including impures
@@ -136,6 +147,7 @@ impl<'a> HirQueueBuilder<'a> {
                         process_attributes(self.hir, Owned::new(owner, id), &f.attributes)?;
                     Ok(HirFunctionDeclaration {
                         name: f.name,
+                        self_type: None,
                         generics,
                         args: Default::default(),
                         ty: signature,

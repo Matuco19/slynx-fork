@@ -30,7 +30,7 @@ use common::{
 use smallvec::SmallVec;
 
 use crate::{
-    DeclarationId, HirDeclaration, LanguageItem, SymbolPointer, TypeDeclaration, VariableId,
+    DeclarationId, HirDeclaration, LanguageItem, Owned, SymbolPointer, TypeDeclaration, VariableId,
     interface::InterfaceTerm,
     model::{HirComponentExpression, HirExpression, HirStatement},
     term::TermId,
@@ -79,6 +79,23 @@ pub struct GenericParameter {
 #[derive(Debug)]
 pub struct HirFunctionDeclaration {
     pub name: SymbolPointer,
+    ///The type this declaration is an inherent method of, or `None` when it is
+    ///not a method of a single type.
+    ///
+    ///The HIR does not mangle. Two types declared in the same file may each
+    ///declare a method called `run`, so a method is identified by the pair
+    ///`(self_type, name)` and never by name alone; the pair is resolved
+    ///through the type-keyed [`MethodTable`](crate::context::types::MethodTable),
+    ///which is the only table methods are registered in. Free functions keep
+    ///their `SymbolRegistry` entry, where a symbol maps to exactly one
+    ///declaration.
+    ///
+    ///`Some` means the name is *not* unique on its own and must be widened with
+    ///the owner's name before it reaches the IR — codegen reads this to mangle.
+    ///`None` means the name is already final: free functions, and the interface
+    ///signature declarations and forwarding thunks, which are synthesized with
+    ///an already-unique name.
+    pub self_type: Option<TermId>,
     pub generics: Vec<GenericParameter>,
     pub args: SmallVec<[VariableId; 2]>,
     pub statements: Vec<Spanned<PoolId<HirStatement>>>,
@@ -104,7 +121,7 @@ pub struct HirObjectDeclaration {
 pub struct HirStaticDeclaration {
     pub name: SymbolPointer,
     pub span: Span,
-    pub ty: TermId,
+    pub ty: Owned<TermId>,
     pub visibility: VisibilityModifier,
     pub external: bool,
     pub attributes: Vec<HirAttribute>,

@@ -1,17 +1,14 @@
 use common::{Operator, Span, Spanned, pool::PoolId};
 use slynx_hir::{
     DeclarationId, HirExpression, HirExpressionKind, HirFunctionDeclaration, HirStatement,
-    SymbolPointer,
-    id::{AnyDeclarationId, AnyLocalDeclarationId},
-    ownership::ExpressionUse,
-    term::TermId,
+    SymbolPointer, ownership::ExpressionUse, term::TermId,
 };
 use slynx_ir::{IRPointer, IRStorage, IRType, IRTypeId, Label, Opcode, Operand, Value};
 use smallvec::{SmallVec, smallvec};
 
 use crate::{
     CodegenError, CodegenErrorKind,
-    lowerers::{LoweringState, functions::FunctionContext},
+    lowerers::{LoweringState, StaticStorage, functions::FunctionContext},
 };
 
 impl<'a> LoweringState<'a> {
@@ -129,7 +126,15 @@ impl<'a> LoweringState<'a> {
             let value = self.lower_expression(*arg, ctx)?;
             arg_values.push(value);
         }
-        Ok(ctx.call(func, &arg_values, ret_ty))
+        if ctx.ir().get(func).is_external()
+            && let Some((first, rest)) = arg_values.split_first()
+        {
+            let return_type = ctx.ir().get_view(func).get_return_type();
+            let func_name = ctx.ir().get_view(func).name();
+            Ok(ctx.dyn_method_call(*first, func_name, rest, return_type))
+        } else {
+            Ok(ctx.call(func, &arg_values, ret_ty))
+        }
     }
 
     fn lower_struct_literal(
@@ -158,7 +163,7 @@ impl<'a> LoweringState<'a> {
         ctx: &mut FunctionContext,
     ) -> Result<Value, CodegenError> {
         let value = self.lower_expression(expr, ctx)?;
-        let ty = self.hir[expr.data].ty;
+        let ty = self.hir[expr.data].ty.term;
 
         match () {
             _ if self.hir.types.is_external(&ty) => {
@@ -270,25 +275,31 @@ impl<'a> LoweringState<'a> {
         let value = match &expression.kind {
             HirExpressionKind::Deref(inner) => {
                 let inner = self.lower_expression(*inner, context)?;
-                let ty =
-                    self.types
-                        .get_or_create_ir_type(expression.ty, expr.span, context.ir())?;
+                let ty = self.types.get_or_create_ir_type(
+                    expression.ty.term,
+                    expr.span,
+                    context.ir(),
+                )?;
                 context.emit(Opcode::Deref, smallvec![inner], ty)
             }
             HirExpressionKind::Reference(inner) => {
                 let inner = self.lower_expression(*inner, context)?;
-                let ty =
-                    self.types
-                        .get_or_create_ir_type(expression.ty, expr.span, context.ir())?;
+                let ty = self.types.get_or_create_ir_type(
+                    expression.ty.term,
+                    expr.span,
+                    context.ir(),
+                )?;
                 context.emit(Opcode::Ref, smallvec![inner], ty)
             }
 
             HirExpressionKind::ArrayIndex(arr, index) => {
                 let index = self.lower_expression(*index, context)?;
                 let arr = self.lower_expression(*arr, context)?;
-                let ty =
-                    self.types
-                        .get_or_create_ir_type(expression.ty, expr.span, context.ir())?;
+                let ty = self.types.get_or_create_ir_type(
+                    expression.ty.term,
+                    expr.span,
+                    context.ir(),
+                )?;
                 context.emit(Opcode::ArrayGet, smallvec![arr, index], ty)
             }
             HirExpressionKind::Array(arr) => {
@@ -296,9 +307,11 @@ impl<'a> LoweringState<'a> {
                     .iter()
                     .map(|expr| self.lower_expression(*expr, context))
                     .collect::<Result<Vec<_>, _>>()?;
-                let value_type =
-                    self.types
-                        .get_or_create_ir_type(expression.ty, expr.span, context.ir())?;
+                let value_type = self.types.get_or_create_ir_type(
+                    expression.ty.term,
+                    expr.span,
+                    context.ir(),
+                )?;
                 context.emit(Opcode::Array, values, value_type)
             }
             HirExpressionKind::Vector(vec) => {
@@ -306,28 +319,24 @@ impl<'a> LoweringState<'a> {
                     .iter()
                     .map(|expr| self.lower_expression(*expr, context))
                     .collect::<Result<Vec<_>, _>>()?;
-                let value_type =
-                    self.types
-                        .get_or_create_ir_type(expression.ty, expr.span, context.ir())?;
+                let value_type = self.types.get_or_create_ir_type(
+                    expression.ty.term,
+                    expr.span,
+                    context.ir(),
+                )?;
                 context.emit(Opcode::Vector, values, value_type)
             }
-            HirExpressionKind::Static { id } => {
-                if let Some(ty) = self.external_statics.get(id) {
+            HirExpressionKind::Static { id } => match self.ensure_static(*id, context.ir())? {
+                StaticStorage::Extern(ty) => {
                     let name = self.hir.get_name(self.hir.get_file(id.owner)[id.term].name);
                     let name = context.ir().strings.intern(name);
-                    context.emit(Opcode::GlobalExtern(name), SmallVec::new(), *ty)
-                } else {
-                    let id = *self.globals.get(id).ok_or(CodegenError::new(
-                        CodegenErrorKind::DeclarationNotRecognized(AnyDeclarationId::new(
-                            id.owner,
-                            AnyLocalDeclarationId::Static(id.term),
-                        )),
-                        expr.span,
-                    ))?;
-                    let ty = context.ir().get_view(id).ty();
-                    context.emit(Opcode::Global(id), SmallVec::new(), ty)
+                    context.emit(Opcode::GlobalExtern(name), SmallVec::new(), ty)
                 }
-            }
+                StaticStorage::Global(global) => {
+                    let ty = context.ir().get_view(global).ty();
+                    context.emit(Opcode::Global(global), SmallVec::new(), ty)
+                }
+            },
             HirExpressionKind::Tuple(vector) => self.lower_tuple_expression(vector, context)?,
             HirExpressionKind::StringLiteral(v) => {
                 let string = self.intern_to_ir(context.ir(), *v);
@@ -379,7 +388,7 @@ impl<'a> LoweringState<'a> {
                 else_branch,
             } => self.lower_if_expression(condition, then_branch, else_branch, context)?,
             HirExpressionKind::Enum { variant, args, .. } => {
-                self.lower_enum(context, expression.ty, *variant, args, expr.span)?
+                self.lower_enum(context, expression.ty.term, *variant, args, expr.span)?
             }
             HirExpressionKind::Matches {
                 value,

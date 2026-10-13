@@ -114,13 +114,12 @@ impl Monomorphizer {
                                 substitute_type(hir, field.ty, subst)?,
                                 span,
                             )?;
-                            Ok(Visible::new(field.visibility, (field.name, new_ty)))
+                            Ok(Visible::new(field.visibility, owner, (field.name, new_ty)))
                         })
                         .collect::<Result<Vec<_>>>()?;
 
                     let specialized_ty =
-                        hir.types
-                            .create_struct_type(mangled_symbol, fields, Vec::new());
+                        hir.types.create_struct_type(owner, mangled_symbol, fields);
 
                     let specialized_local = {
                         let file = hir.get_file_mut(owner);

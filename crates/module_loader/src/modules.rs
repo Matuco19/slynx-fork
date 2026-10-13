@@ -10,7 +10,7 @@ use common::{
 use slynx_parser::{
     ASTExpression, ASTPath, ASTStatement, AliasDeclaration, ComponentDeclaration, EnumDeclaration,
     ExtendDeclaration, FileImport, InterfaceDeclaration, NamedASTDeclaration, ObjectDeclaration,
-    Program, StaticDeclaration, Type, TypeASTDeclaration,
+    Program, Type,
 };
 
 use crate::{FileId, SourceLoader, SourceNode};
@@ -220,7 +220,7 @@ impl<'a> Modules<'a> {
         Program: PoolStorage<T> + PoolStorage<FileImport>,
         T: NamedASTDeclaration,
     {
-        let module = &self.modules[requester.as_raw() as usize];
+        let module = &self.modules[current_entry.as_raw() as usize];
         if let Some(content) = (module.get_pool() as &Pool<T>).iter().position(|content| {
             content.name() == name
                 && (content.visibility() == VisibilityModifier::Public

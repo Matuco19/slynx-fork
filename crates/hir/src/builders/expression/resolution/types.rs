@@ -81,7 +81,7 @@ impl ExpressionBuilder {
         descriptor: FindInherentMethodDescriptor,
     ) -> Result<Option<Visible<DeclarationId<HirFunctionDeclaration>>>> {
         let Owned { owner, term } = descriptor.ty;
-        let descriptor_name = match queue.hir.view(term).raw().node() {
+        let descriptor_name = match queue.hir.view(term).nominal().raw().node() {
             //only descriptor types mau have inherent methods.
             TermNode::Data(DescriptorId::Struct(id)) => queue.hir.types.get_struct_name(*id),
             TermNode::Data(DescriptorId::Enum(id)) => queue.hir.types.get_enum_name(*id),

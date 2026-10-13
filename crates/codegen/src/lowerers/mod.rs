@@ -21,6 +21,19 @@ pub use types::*;
 
 use crate::CodegenError;
 
+///The IR storage backing a static declaration.
+///
+///A static is materialized the first time an expression reads it, so this is
+///also what distinguishes "not referenced yet" from "extern".
+#[derive(Debug, Clone, Copy)]
+pub enum StaticStorage {
+    ///An `extern` static has no IR definition at all — the backend resolves
+    ///the name at link time. Only its type and its external name are needed.
+    Extern(IRTypeId),
+    ///A plain static becomes a zero-initialized global.
+    Global(IRPointer<GlobalValue, 1>),
+}
+
 ///The shared state of the HIR→IR lowering pipeline.
 ///
 ///All lowerers operate through this struct instead of threading `&SlynxHir`
@@ -72,6 +85,49 @@ impl<'a> LoweringState<'a> {
         let ptr = ir.strings.intern(s);
         self.names.insert(symbol, ptr);
         ptr
+    }
+
+    ///Resolves the IR storage for the static `id`, materializing it on first
+    ///reference.
+    ///
+    ///Statics are resolved lazily rather than in a hoisting pass because a
+    ///static may be declared in a file that has not been walked yet:
+    ///declarations are visited through `HirStore::files`, which is a `DashMap`
+    ///and so has no stable order, and registering per-file while lowering bodies
+    ///per-file made a cross-file reference fail or succeed depending on
+    ///iteration order. Resolving at the single point where a static is read
+    ///removes the ordering constraint instead of papering over it.
+    ///
+    ///A static that is never referenced is never created, which is why this needs
+    ///no `deadcode` check: unreferenced statics never reach here.
+    fn ensure_static(
+        &mut self,
+        id: DeclarationId<HirStaticDeclaration>,
+        ir: &mut SlynxIR,
+    ) -> Result<StaticStorage, CodegenError> {
+        if let Some(ty) = self.external_statics.get(&id) {
+            return Ok(StaticStorage::Extern(*ty));
+        }
+        if let Some(global) = self.globals.get(&id) {
+            return Ok(StaticStorage::Global(*global));
+        }
+
+        // `DeclarationId` is `(FileId, PoolId<…>)`, so this is a direct index
+        // into the owning file's pool — no search involved.
+        let statik = &self.hir.get_file(id.owner)[id.term];
+        let ty = self
+            .types
+            .get_or_create_ir_type(statik.ty.term, statik.span, ir)?;
+
+        let storage = if statik.external {
+            self.external_statics.insert(id, ty);
+            StaticStorage::Extern(ty)
+        } else {
+            let global = ir.create_global(self.hir.get_name(statik.name), InitValue::ZeroInit(ty));
+            self.globals.insert(id, global);
+            StaticStorage::Global(global)
+        };
+        Ok(storage)
     }
 
     pub fn generate(
@@ -199,19 +255,9 @@ impl<'a> LoweringState<'a> {
                     ir,
                 )?;
             }
-            for (id, statik) in file.statik.iter().with_ids() {
-                let name = statik.name;
-                let ty = self
-                    .types
-                    .get_or_create_ir_type(statik.ty.term, statik.span, ir)?;
-                let id = DeclarationId::new(file.file, id);
-                if statik.external {
-                    self.external_statics.insert(id, ty);
-                } else {
-                    let global = ir.create_global(self.hir.get_name(name), InitValue::ZeroInit(ty));
-                    self.globals.insert(id, global);
-                }
-            }
+            // Statics are deliberately absent here. They are materialized by
+            // `ensure_static` at the point an expression reads one, so that a
+            // static declared in a not-yet-visited file still resolves.
             for (id, declaration) in file.declarations.functions.iter().with_ids() {
                 if deadcode.contains(&AnyDeclarationId::new(
                     file.file,

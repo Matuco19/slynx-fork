@@ -4,6 +4,7 @@ use common::{
     dedup_pooled,
     pool::{DedupPool, DedupPoolId},
 };
+use module_loader::FileId;
 
 use crate::{ComponentType, StructField, SymbolPointer, Visible, term::TermId};
 use common::DedupPoolStorage;
@@ -16,6 +17,7 @@ impl ComponentsPool {
     pub fn insert_component(
         &self,
         name: SymbolPointer,
+        owner: FileId,
         properties: Vec<(SymbolPointer, TermId)>,
         children: Vec<DedupPoolId<ComponentType>>,
     ) -> DedupPoolId<ComponentType> {
@@ -26,6 +28,7 @@ impl ComponentsPool {
                 .map(|property| {
                     Visible::new(
                         common::VisibilityModifier::Public,
+                        owner,
                         StructField {
                             ty: property.1,
                             name: property.0,

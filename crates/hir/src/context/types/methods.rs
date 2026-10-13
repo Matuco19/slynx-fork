@@ -1,9 +1,9 @@
-use common::pool::DedupPoolId;
+use common::{VisibilityModifier, pool::DedupPoolId};
 use dashmap::{DashMap, mapref::one::Ref};
 
 use crate::{
     DeclarationId, HirExtendDeclaration, HirFunctionDeclaration, InterfaceType, SymbolPointer,
-    term::TermId,
+    Visible, term::TermId,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -33,7 +33,8 @@ pub struct InterfaceMethodSignature {
 /// keying methods off.
 pub struct MethodTable {
     /// Maps a type id to the map of (method name → declaration) registered on it.
-    methods: DashMap<TermId, DashMap<SymbolPointer, DeclarationId<HirFunctionDeclaration>>>,
+    methods:
+        DashMap<TermId, DashMap<SymbolPointer, Visible<DeclarationId<HirFunctionDeclaration>>>>,
     /// Maps (parent_type, method_name) -> return_type for external object methods.
     external_methods: DashMap<(TermId, SymbolPointer), TermId>,
     ///Maps a type to an interface type. This occurs when a type is extended with an interface. Such as `extend int: ToString {}` this'd be `int` → `ToString`.
@@ -66,9 +67,9 @@ impl MethodTable {
         &self,
         ty: TermId,
         name: SymbolPointer,
-        id: DeclarationId<HirFunctionDeclaration>,
+        func: Visible<DeclarationId<HirFunctionDeclaration>>,
     ) {
-        self.methods.entry(ty).or_default().insert(name, id);
+        self.methods.entry(ty).or_default().insert(name, func);
     }
 
     pub fn get_extensions_of<'a>(
@@ -88,8 +89,8 @@ impl MethodTable {
         &self,
         ty: TermId,
         name: SymbolPointer,
-    ) -> Option<DeclarationId<HirFunctionDeclaration>> {
-        self.methods.get(&ty)?.get(&name).map(|v| *v.value())
+    ) -> Option<Visible<DeclarationId<HirFunctionDeclaration>>> {
+        self.methods.get(&ty)?.get(&name).map(|v| v.value().clone())
     }
 
     /// Whether any methods are registered for `ty`.
@@ -122,12 +123,15 @@ impl MethodTable {
     pub fn get_methods_of(
         &self,
         ty: TermId,
-    ) -> Vec<(SymbolPointer, DeclarationId<HirFunctionDeclaration>)> {
+    ) -> Vec<(
+        SymbolPointer,
+        Visible<DeclarationId<HirFunctionDeclaration>>,
+    )> {
         if let Some(methods_map) = self.methods.get(&ty) {
             let mut out = Vec::with_capacity(methods_map.len());
             for entry in methods_map.iter() {
                 let (key, value) = entry.pair();
-                out.push((*key, *value));
+                out.push((*key, value.clone()));
             }
             out
         } else {

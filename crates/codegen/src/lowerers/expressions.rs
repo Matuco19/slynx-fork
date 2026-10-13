@@ -129,7 +129,15 @@ impl<'a> LoweringState<'a> {
             let value = self.lower_expression(*arg, ctx)?;
             arg_values.push(value);
         }
-        Ok(ctx.call(func, &arg_values, ret_ty))
+        if ctx.ir().get(func).is_external()
+            && let Some((first, rest)) = arg_values.split_first()
+        {
+            let return_type = ctx.ir().get_view(func).get_return_type();
+            let func_name = ctx.ir().get_view(func).name();
+            Ok(ctx.dyn_method_call(*first, func_name, rest, return_type))
+        } else {
+            Ok(ctx.call(func, &arg_values, ret_ty))
+        }
     }
 
     fn lower_struct_literal(

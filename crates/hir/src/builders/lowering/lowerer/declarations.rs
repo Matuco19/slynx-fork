@@ -148,14 +148,20 @@ impl<'a> ASTLowerer<'a> {
             .iter()
             .map(|field| {
                 self.lower_type(queue, owner, field.name.data.kind, &context)
-                    .map(|ty| Visible::new(field.visibility, (field.name.data.name.data, ty.term)))
+                    .map(|ty| {
+                        Visible::new(
+                            field.visibility,
+                            owner,
+                            (field.name.data.name.data, ty.term),
+                        )
+                    })
             })
             .collect::<Result<Vec<_>>>()?;
 
         let struct_type = queue
             .hir
             .types
-            .create_struct_type(declaration.name, fields, Vec::new());
+            .create_struct_type(owner, declaration.name, fields);
         queue
             .hir
             .store

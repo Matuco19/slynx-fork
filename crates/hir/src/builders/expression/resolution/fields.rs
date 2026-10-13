@@ -1,5 +1,5 @@
 use common::{
-    Span, Spanned, VisibilityModifier,
+    Span, Spanned,
     pool::{DedupPoolId, PoolId},
 };
 use either::Either;
@@ -175,7 +175,7 @@ impl ExpressionBuilder {
                 let name = *name;
                 Ok(TypeAccessCategory::StaticMethod {
                     name,
-                    target: method,
+                    target: method.data,
                     args: args.to_vec(),
                 })
             }
@@ -205,14 +205,13 @@ impl ExpressionBuilder {
                 let parent_type_view = queue.hir.view(queue.hir[parent.data].ty);
                 let parent_ty = parent_type_view.inner_type().nominal();
 
-                let inherent = match parent_ty.is_struct() {
-                    Some(view) => view
-                        .method_named_as(name_sym, VisibilityModifier::Public)
-                        .or_else(|| queue.hir.types.methods.method_of(parent_ty.data, name_sym)),
-                    None => None,
-                };
+                // Methods are keyed by their owning type, so one lookup covers
+                // structs, enums and components alike. A miss means the method
+                // has not been materialized yet; `find_inherent_method_of` below
+                // creates and registers it.
+                let inherent = queue.hir.types.method_of(parent_ty.data, name_sym);
                 let func_id = match inherent {
-                    Some(id) => id,
+                    Some(id) => id.data,
                     None if let Some(id) = self.find_inherent_method_of(
                         queue,
                         FindInherentMethodDescriptor {
@@ -222,7 +221,7 @@ impl ExpressionBuilder {
                         },
                     )? =>
                     {
-                        id
+                        id.data
                     }
                     None => {
                         let parent_view = queue.hir.view(parent.data);

@@ -114,6 +114,9 @@ impl<'a> HirQueueBuilder<'a> {
                 Ok(self.hir.store.get_or_create_file(owner).create_function(
                     HirFunctionDeclaration {
                         name,
+                        // The name is already widened with the interface, so no
+                        // owner has to be appended downstream.
+                        self_type: None,
                         // `Self` is generic parameter 0 so the receiver supplied
                         // at the call site substitutes it.
                         generics: vec![GenericParameter {
@@ -306,7 +309,7 @@ impl<'a> HirQueueBuilder<'a> {
                     .internal_name(),
                 self.hir.get_name(method.name)
             ));
-            let declaration_id = self.insert_method_declaration(InsertMethodDeclaration {
+            let declaration = self.insert_method_declaration(InsertMethodDeclaration {
                 entry: descriptor.extension.owner,
                 method,
                 self_type: descriptor.target,
@@ -315,7 +318,7 @@ impl<'a> HirQueueBuilder<'a> {
                 declaration_name,
                 register_as_inherent: false,
             })?;
-            methods.push((method.name, declaration_id));
+            methods.push((method.name, declaration.data));
         }
 
         let declaration = HirExtendDeclaration {

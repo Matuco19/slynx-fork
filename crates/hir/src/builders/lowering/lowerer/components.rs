@@ -46,7 +46,7 @@ impl<'a> ASTLowerer<'a> {
         Ok(queue
             .hir
             .types
-            .create_component_type(component.name, properties, children))
+            .create_component_type(component.name, requester, properties, children))
     }
 
     /// Resolve a component's signature with cycle detection.

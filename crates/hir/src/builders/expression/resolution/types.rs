@@ -7,6 +7,7 @@ use slynx_parser::{
 use crate::{
     DeclarationId, DescriptorId, ExpressionBuilder, GenericParameter, HIRError,
     HirExtendDeclaration, HirFunctionDeclaration, HirQueueBuilder, Owned, Result, SymbolPointer,
+    Visible,
     builders::{
         function::InsertMethodDeclaration, interfaces::InterfaceImplementationDescriptor,
         lowering::lookup::FindExtensionsWithMethodDescriptor,
@@ -78,7 +79,7 @@ impl ExpressionBuilder {
         &self,
         queue: &HirQueueBuilder,
         descriptor: FindInherentMethodDescriptor,
-    ) -> Result<Option<DeclarationId<HirFunctionDeclaration>>> {
+    ) -> Result<Option<Visible<DeclarationId<HirFunctionDeclaration>>>> {
         let Owned { owner, term } = descriptor.ty;
         let descriptor_name = match queue.hir.view(term).raw().node() {
             //only descriptor types mau have inherent methods.
@@ -120,12 +121,6 @@ impl ExpressionBuilder {
         else {
             return Ok(None);
         };
-
-        let declaration_name = queue.hir.intern_name(&format!(
-            "{}_{}",
-            queue.hir.get_name(descriptor.name),
-            queue.hir.get_name(descriptor_name)
-        ));
         queue
             .insert_method_declaration(InsertMethodDeclaration {
                 entry: asttype.owner,
@@ -133,7 +128,7 @@ impl ExpressionBuilder {
                 self_type: descriptor.ty.term,
                 visibility,
                 external,
-                declaration_name,
+                declaration_name: descriptor.name,
                 register_as_inherent: true,
             })
             .map(Some)

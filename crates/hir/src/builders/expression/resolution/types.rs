@@ -1,4 +1,4 @@
-use common::{Span, VisibilityModifier, pool::PoolId};
+use common::{Span, pool::PoolId};
 use module_loader::ASTTypeKind;
 use slynx_parser::{
     ExtendDeclaration, InterfaceDeclaration, NamedASTDeclaration, ObjectMethod, TypeContext,
@@ -94,26 +94,25 @@ impl ExpressionBuilder {
                 descriptor.span,
             ));
         };
-        let (methods, external, visibility): (&[ObjectMethod], bool, VisibilityModifier) =
-            match asttype.content {
-                ASTTypeKind::Struct(strukt) => {
-                    let object = queue.modules.get_entry(asttype.owner).object().get(strukt);
-                    (&object.methods, object.external, object.visibility)
-                }
-                ASTTypeKind::Component(component) => {
-                    let component = queue
-                        .modules
-                        .get_entry(asttype.owner)
-                        .component()
-                        .get(component);
-                    (&component.methods, false, component.visibility)
-                }
-                ASTTypeKind::Enum(enum_) => {
-                    let enum_ = queue.modules.get_entry(asttype.owner).enums().get(enum_);
-                    (&enum_.methods, false, enum_.visibility)
-                }
-                _ => (&[][..], false, VisibilityModifier::Public),
-            };
+        let (methods, external): (&[ObjectMethod], bool) = match asttype.content {
+            ASTTypeKind::Struct(strukt) => {
+                let object = queue.modules.get_entry(asttype.owner).object().get(strukt);
+                (&object.methods, object.external)
+            }
+            ASTTypeKind::Component(component) => {
+                let component = queue
+                    .modules
+                    .get_entry(asttype.owner)
+                    .component()
+                    .get(component);
+                (&component.methods, false)
+            }
+            ASTTypeKind::Enum(enum_) => {
+                let enum_ = queue.modules.get_entry(asttype.owner).enums().get(enum_);
+                (&enum_.methods, false)
+            }
+            _ => (&[][..], false),
+        };
 
         let Some(method) = methods
             .iter()
@@ -126,7 +125,10 @@ impl ExpressionBuilder {
                 entry: asttype.owner,
                 method,
                 self_type: descriptor.ty.term,
-                visibility,
+                // The *method's* own visibility, not the type's. A `pub` type
+                // may still declare private methods, and it is the method that
+                // is being reached across a file boundary.
+                visibility: method.visibility,
                 external,
                 declaration_name: descriptor.name,
                 register_as_inherent: true,

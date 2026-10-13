@@ -1,4 +1,4 @@
-use common::{VisibilityModifier, pool::DedupPoolId};
+use common::pool::DedupPoolId;
 use dashmap::{DashMap, mapref::one::Ref};
 
 use crate::{

@@ -33,7 +33,11 @@ impl StructsPool {
             })
             .collect();
 
-        let s = StructType { name, fields };
+        let s = StructType {
+            name,
+            owner,
+            fields,
+        };
 
         self.structs.insert(s)
     }

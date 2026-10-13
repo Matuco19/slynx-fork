@@ -23,6 +23,7 @@ impl ComponentsPool {
     ) -> DedupPoolId<ComponentType> {
         let s = ComponentType {
             name,
+            owner,
             properties: properties
                 .into_iter()
                 .map(|property| {

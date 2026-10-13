@@ -6,7 +6,7 @@ mod storage;
 mod structs;
 use std::ops::Index;
 
-use common::{VisibilityModifier, pool::DedupPoolId};
+use common::pool::DedupPoolId;
 use dashmap::{DashMap, DashSet};
 use module_loader::FileId;
 
@@ -193,6 +193,23 @@ impl TypesContext {
 
     pub fn get_component_name(&self, ty: DedupPoolId<ComponentType>) -> SymbolPointer {
         self.storage.components[ty].name
+    }
+
+    ///The file the given component was declared in.
+    ///
+    ///Every consumer that rebuilds or stamps a component reads its owner from
+    ///the type itself rather than being handed one by its caller. A component
+    ///tree mixes declarations from several files — a child written in an
+    ///imported file is not owned by the file that nests it — so an owner
+    ///threaded down from the root would silently stamp the wrong file on every
+    ///descendant.
+    pub fn get_component_owner(&self, ty: DedupPoolId<ComponentType>) -> FileId {
+        self.storage.components[ty].owner
+    }
+
+    ///The file the given struct was declared in.
+    pub fn get_struct_owner(&self, ty: DedupPoolId<StructType>) -> FileId {
+        self.storage.structs[ty].owner
     }
 
     ///Registers a method for the given `ty` on the current declaration context with the given `name` that points to the given `id`. It should be asserted by the HIR to be a function ID

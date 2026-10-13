@@ -46,6 +46,12 @@ impl HirFile {
         create_enum = insert_at_enums(HirEnumDeclaration),
     );
 
+    ///Finds the free function declared under `name` in this file.
+    ///
+    ///Methods live in the same column but carry a `self_type` and are reachable
+    ///only through the type-keyed method table, so they are skipped: a method's
+    ///name is not unique within a file and matching one here would let a bare
+    ///call bind to a method instead of reporting the name as unresolved.
     pub fn find_function_with_name(
         &self,
         name: SymbolPointer,
@@ -54,7 +60,7 @@ impl HirFile {
             .declarations
             .functions
             .iter()
-            .position(|f| f.name == name)
+            .position(|f| f.name == name && f.self_type.is_none())
             .map(|idx| DeclarationId::new(self.file, PoolId::new(idx as u32)))
         //since internally its just an index, this gets the id properly.
     }

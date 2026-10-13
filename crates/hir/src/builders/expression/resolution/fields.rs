@@ -207,22 +207,25 @@ impl ExpressionBuilder {
 
                 // Methods are keyed by their owning type, so one lookup covers
                 // structs, enums and components alike. A miss means the method
-                // has not been materialized yet; `find_inherent_method_of` below
+                // has not been materialized yet; `find_inherent_method_of`
                 // creates and registers it.
-                let inherent = queue.hir.types.method_of(parent_ty.data, name_sym);
-                let func_id = match inherent {
-                    Some(id) => id.data,
-                    None if let Some(id) = self.find_inherent_method_of(
+                let inherent = match queue.hir.types.method_of(parent_ty.data, name_sym) {
+                    Some(id) => Some(id),
+                    None => self.find_inherent_method_of(
                         queue,
                         FindInherentMethodDescriptor {
                             ty: parent_type_view.data,
                             name: name_sym,
                             span,
                         },
-                    )? =>
-                    {
-                        id.data
-                    }
+                    )?,
+                };
+
+                let func_id = match inherent {
+                    // A method is visible when it is `pub`, or when the call
+                    // site sits in the file that declared it.
+                    Some(method) if method.is_visible(self.file()) => method.data,
+                    Some(_) => return Err(HIRError::not_visible_method(name_sym, span)),
                     None => {
                         let parent_view = queue.hir.view(parent.data);
 

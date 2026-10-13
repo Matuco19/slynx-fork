@@ -51,6 +51,7 @@ pub mod vector;
 use crate::{SymbolPointer, Visible, term::TermId};
 
 use common::{VisibilityModifier, pool::DedupPoolId};
+use module_loader::FileId;
 use smallvec::SmallVec;
 
 /// A property of a component type.
@@ -158,6 +159,10 @@ pub struct StructField {
 #[derive(Debug, Hash, Clone, PartialEq, Eq)]
 pub struct StructType {
     pub(crate) name: SymbolPointer,
+    ///The file this struct was declared in. Part of the type's identity for the
+    ///same reason as [`ComponentType::owner`]: two same-shaped structs in
+    ///different files are not visible in the same places.
+    pub(crate) owner: FileId,
     pub(crate) fields: Vec<Visible<StructField>>,
 }
 
@@ -190,6 +195,14 @@ pub struct EnumType {
 #[derive(Debug, Hash, Clone, PartialEq, Eq)]
 pub struct ComponentType {
     pub(crate) name: SymbolPointer,
+    /// The file this component was declared in.
+    ///
+    /// Part of the type's identity on purpose: two structurally identical
+    /// components declared in different files are *not* the same type, because
+    /// they are not visible in the same places. Without this, dedup would merge
+    /// them and a private component would leak into the file that reused its
+    /// shape.
+    pub(crate) owner: FileId,
     pub(crate) properties: Vec<Visible<StructField>>,
     pub(crate) children: Vec<DedupPoolId<ComponentType>>,
 }

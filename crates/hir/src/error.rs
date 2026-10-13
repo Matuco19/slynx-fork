@@ -167,6 +167,11 @@ pub enum HIRErrorKind {
         /// The name of the non-visible property.
         prop_name: SymbolPointer,
     },
+    /// A method was called that exists but is not visible from the calling file.
+    MethodNotVisible {
+        /// The name of the non-visible method.
+        method_name: SymbolPointer,
+    },
     /// A component child expression is not valid in this context.
     InvalidChild,
     /// A type was used in an invalid way (e.g., missing generics or incorrect usage).
@@ -431,6 +436,10 @@ impl HIRError {
     pub fn not_visible_property(name: SymbolPointer, span: Span) -> Self {
         Self::new(HIRErrorKind::PropertyNotVisible { prop_name: name }, span)
     }
+    /// Creates a [`HIRErrorKind::MethodNotVisible`] error for the given method name.
+    pub fn not_visible_method(name: SymbolPointer, span: Span) -> Self {
+        Self::new(HIRErrorKind::MethodNotVisible { method_name: name }, span)
+    }
     /// Creates a [`HIRErrorKind::InvalidFieldAccessTarget`] for accessing a non-struct type as a struct.
     pub fn not_a_struct(ty: TermId, span: Span) -> Self {
         Self::new(HIRErrorKind::InvalidFieldAccessTarget { ty }, span)
@@ -656,6 +665,7 @@ impl std::fmt::Display for HIRError {
             HIRErrorKind::MissingProperty { .. } => write!(f, "Missing required property"),
             HIRErrorKind::PropertyNotRecognized { .. } => write!(f, "Property not recognized"),
             HIRErrorKind::PropertyNotVisible { .. } => write!(f, "Property not visible"),
+            HIRErrorKind::MethodNotVisible { .. } => write!(f, "Method not visible"),
             HIRErrorKind::InvalidChild => write!(f, "Invalid child expression"),
             HIRErrorKind::InvalidType { reason, .. } => write!(f, "Invalid type: {reason}"),
             HIRErrorKind::RecursiveType { .. } => write!(f, "Recursive type definition"),

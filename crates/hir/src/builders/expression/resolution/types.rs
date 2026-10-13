@@ -1,4 +1,4 @@
-use common::{Span, VisibilityModifier, pool::PoolId};
+use common::{Span, pool::PoolId};
 use module_loader::ASTTypeKind;
 use slynx_parser::{
     ExtendDeclaration, InterfaceDeclaration, NamedASTDeclaration, ObjectMethod, TypeContext,
@@ -7,6 +7,7 @@ use slynx_parser::{
 use crate::{
     DeclarationId, DescriptorId, ExpressionBuilder, GenericParameter, HIRError,
     HirExtendDeclaration, HirFunctionDeclaration, HirQueueBuilder, Owned, Result, SymbolPointer,
+    Visible,
     builders::{
         function::InsertMethodDeclaration, interfaces::InterfaceImplementationDescriptor,
         lowering::lookup::FindExtensionsWithMethodDescriptor,
@@ -78,7 +79,7 @@ impl ExpressionBuilder {
         &self,
         queue: &HirQueueBuilder,
         descriptor: FindInherentMethodDescriptor,
-    ) -> Result<Option<DeclarationId<HirFunctionDeclaration>>> {
+    ) -> Result<Option<Visible<DeclarationId<HirFunctionDeclaration>>>> {
         let Owned { owner, term } = descriptor.ty;
         let descriptor_name = match queue.hir.view(term).raw().node() {
             //only descriptor types mau have inherent methods.
@@ -93,26 +94,25 @@ impl ExpressionBuilder {
                 descriptor.span,
             ));
         };
-        let (methods, external, visibility): (&[ObjectMethod], bool, VisibilityModifier) =
-            match asttype.content {
-                ASTTypeKind::Struct(strukt) => {
-                    let object = queue.modules.get_entry(asttype.owner).object().get(strukt);
-                    (&object.methods, object.external, object.visibility)
-                }
-                ASTTypeKind::Component(component) => {
-                    let component = queue
-                        .modules
-                        .get_entry(asttype.owner)
-                        .component()
-                        .get(component);
-                    (&component.methods, false, component.visibility)
-                }
-                ASTTypeKind::Enum(enum_) => {
-                    let enum_ = queue.modules.get_entry(asttype.owner).enums().get(enum_);
-                    (&enum_.methods, false, enum_.visibility)
-                }
-                _ => (&[][..], false, VisibilityModifier::Public),
-            };
+        let (methods, external): (&[ObjectMethod], bool) = match asttype.content {
+            ASTTypeKind::Struct(strukt) => {
+                let object = queue.modules.get_entry(asttype.owner).object().get(strukt);
+                (&object.methods, object.external)
+            }
+            ASTTypeKind::Component(component) => {
+                let component = queue
+                    .modules
+                    .get_entry(asttype.owner)
+                    .component()
+                    .get(component);
+                (&component.methods, false)
+            }
+            ASTTypeKind::Enum(enum_) => {
+                let enum_ = queue.modules.get_entry(asttype.owner).enums().get(enum_);
+                (&enum_.methods, false)
+            }
+            _ => (&[][..], false),
+        };
 
         let Some(method) = methods
             .iter()
@@ -120,20 +120,17 @@ impl ExpressionBuilder {
         else {
             return Ok(None);
         };
-
-        let declaration_name = queue.hir.intern_name(&format!(
-            "{}_{}",
-            queue.hir.get_name(descriptor.name),
-            queue.hir.get_name(descriptor_name)
-        ));
         queue
             .insert_method_declaration(InsertMethodDeclaration {
                 entry: asttype.owner,
                 method,
                 self_type: descriptor.ty.term,
-                visibility,
+                // The *method's* own visibility, not the type's. A `pub` type
+                // may still declare private methods, and it is the method that
+                // is being reached across a file boundary.
+                visibility: method.visibility,
                 external,
-                declaration_name,
+                declaration_name: descriptor.name,
                 register_as_inherent: true,
             })
             .map(Some)

@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod views_terms_tests {
     use common::{FrontendSymbol, SymbolsModule, VisibilityModifier};
+    use module_loader::FileId;
 
     use crate::{
         EnumVariantType, SlynxHir, SymbolPointer, arrays::ArrayTerm, context::TypesContext,
@@ -164,9 +165,9 @@ mod views_terms_tests {
             person_name,
             vec![Visible::new(
                 VisibilityModifier::Public,
+                FileId::new(0),
                 (field_name, int_id),
             )],
-            Vec::new(),
         );
 
         let color_name: SymbolPointer = symbols.intern("Color");
@@ -180,7 +181,9 @@ mod views_terms_tests {
         );
 
         let label_name: SymbolPointer = symbols.intern("Label");
-        let component_id = hir.types.create_component_type(label_name, vec![], vec![]);
+        let component_id =
+            hir.types
+                .create_component_type(label_name, FileId::new(0), vec![], vec![]);
 
         let person_term = hir.view(person_id);
         assert!(person_term.is_struct().is_some());

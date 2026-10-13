@@ -101,7 +101,7 @@ impl Monomorphizer {
         span: Span,
     ) -> Result<DeclarationId<HirFunctionDeclaration>> {
         let owner = template.owner;
-        let (fargs, fty, statements, visibility, external, attributes) = {
+        let (fargs, fty, statements, visibility, external, attributes, self_type) = {
             let file = hir.get_file(owner);
             let declaration = &file.declarations.declarations.functions[template.term];
             (
@@ -111,6 +111,11 @@ impl Monomorphizer {
                 declaration.visibility,
                 declaration.external,
                 declaration.attributes.clone(),
+                // Carried over so a specialization of a *method* still records
+                // its owner. `mangle_name` is derived from the template's plain
+                // name, so `A.run<int>` and `B.run<int>` would otherwise both be
+                // named `run_...`; keeping the owner lets codegen widen them.
+                declaration.self_type,
             )
         };
 
@@ -138,6 +143,7 @@ impl Monomorphizer {
                             .functions
                             .insert(HirFunctionDeclaration {
                                 name: mangled_symbol,
+                                self_type,
                                 generics: Vec::new(),
                                 args: fargs,
                                 ty: specialized_ty,

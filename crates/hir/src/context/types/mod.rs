@@ -8,6 +8,7 @@ use std::ops::Index;
 
 use common::pool::DedupPoolId;
 use dashmap::{DashMap, DashSet};
+use module_loader::FileId;
 
 use crate::{
     ComponentType, DeclarationId, EnumType, EnumVariantType, HirFunctionDeclaration, InterfaceType,
@@ -91,11 +92,11 @@ impl TypesContext {
 
     pub fn create_struct_type(
         &self,
+        owner: FileId,
         name: SymbolPointer,
         fields: Vec<Visible<(SymbolPointer, TermId)>>,
-        methods: Vec<Visible<(SymbolPointer, DeclarationId<HirFunctionDeclaration>)>>,
     ) -> TermId {
-        let id = self.storage.structs.insert_struct(name, fields, methods);
+        let id = self.storage.structs.insert_struct(name, fields, owner);
         let id = self.storage.insert_type(Term::struct_type(id));
         self.registry.register(name, id);
         id
@@ -142,13 +143,14 @@ impl TypesContext {
     pub fn create_component_type(
         &self,
         name: SymbolPointer,
+        owner: FileId,
         properties: Vec<(SymbolPointer, TermId)>,
         children: Vec<DedupPoolId<ComponentType>>,
     ) -> TermId {
         let comp_ty = self
             .storage
             .components
-            .insert_component(name, properties, children);
+            .insert_component(name, owner, properties, children);
         let id = self.storage.insert_type(Term::component_type(comp_ty));
         self.registry.register(name, id);
         id
@@ -193,12 +195,29 @@ impl TypesContext {
         self.storage.components[ty].name
     }
 
+    ///The file the given component was declared in.
+    ///
+    ///Every consumer that rebuilds or stamps a component reads its owner from
+    ///the type itself rather than being handed one by its caller. A component
+    ///tree mixes declarations from several files — a child written in an
+    ///imported file is not owned by the file that nests it — so an owner
+    ///threaded down from the root would silently stamp the wrong file on every
+    ///descendant.
+    pub fn get_component_owner(&self, ty: DedupPoolId<ComponentType>) -> FileId {
+        self.storage.components[ty].owner
+    }
+
+    ///The file the given struct was declared in.
+    pub fn get_struct_owner(&self, ty: DedupPoolId<StructType>) -> FileId {
+        self.storage.structs[ty].owner
+    }
+
     ///Registers a method for the given `ty` on the current declaration context with the given `name` that points to the given `id`. It should be asserted by the HIR to be a function ID
     pub fn create_method(
         &self,
         ty: TermId,
         name: SymbolPointer,
-        id: DeclarationId<HirFunctionDeclaration>,
+        id: Visible<DeclarationId<HirFunctionDeclaration>>,
     ) {
         self.methods.create_method(ty, name, id);
     }
@@ -223,11 +242,30 @@ impl TypesContext {
         self.methods.get_method_return_type(parent_ty, name)
     }
 
+    ///Returns the declaration of the method `name` already materialized on
+    ///`ty`, if any.
+    ///
+    ///This is the single source of truth for methods: a method is keyed by the
+    ///pair `(owning type, method name)` because two types may declare the same
+    ///method name, so it deliberately does not live in the `SymbolRegistry`,
+    ///which is keyed by `(file, symbol)` and is reserved for free functions.
+    ///`None` means the method has not been resolved yet.
+    pub fn method_of(
+        &self,
+        ty: TermId,
+        name: SymbolPointer,
+    ) -> Option<Visible<DeclarationId<HirFunctionDeclaration>>> {
+        self.methods.method_of(ty, name)
+    }
+
     ///Registers a method for the given `ty` on the current declaration context with the given `name` that points to the given `id`. It should be asserted by the HIR to be a function ID
     pub fn get_methods_of(
         &self,
         ty: TermId,
-    ) -> Vec<(SymbolPointer, DeclarationId<HirFunctionDeclaration>)> {
+    ) -> Vec<(
+        SymbolPointer,
+        Visible<DeclarationId<HirFunctionDeclaration>>,
+    )> {
         self.methods.get_methods_of(ty)
     }
 

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use common::{Span, Spanned, VisibilityModifier, pool::DedupPoolId};
+use common::{Span, Spanned, pool::DedupPoolId};
 use module_loader::FileId;
 use slynx_parser::{NamedExpr, Type, TypeContext};
 
@@ -77,12 +77,12 @@ impl ExpressionBuilder {
             .fields()
             .iter()
             .enumerate()
-            .map(|(i, s)| (s.data.name, (i, s.visibility)))
+            .map(|(i, s)| (s.data.name, (i, s)))
             .collect();
         let mut ordered = vec![None; obj.fields().len()];
 
         for field in fields {
-            let (idx, visibility) =
+            let (idx, visible) =
                 *type_names
                     .get(&field.data.name)
                     .ok_or(HIRError::property_unrecognized(
@@ -90,7 +90,9 @@ impl ExpressionBuilder {
                         vec![field.data.name],
                         field.span,
                     ))?;
-            if visibility != VisibilityModifier::Public && ty.owner != requester {
+            // A field is visible when it is `pub`, or when the literal sits in
+            // the file that declared it.
+            if !visible.is_visible(requester) {
                 return Err(HIRError::not_visible_property(field.data.name, field.span));
             }
 

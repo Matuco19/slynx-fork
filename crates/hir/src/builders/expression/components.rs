@@ -3,8 +3,10 @@ use module_loader::{ASTType, ASTTypeKind};
 use slynx_parser::{ComponentExpression, ComponentMemberValue, TypeContext};
 
 use crate::{
-    HIRError, HirComponentExpression, PropertyExpression, Result, builders::HirQueueBuilder,
+    HIRError, HirComponentExpression, PropertyExpression, Result,
+    builders::HirQueueBuilder,
     context::HirSymbol,
+    term::{TermId, TermNode},
 };
 
 use super::{ExpressionBuilder, ExpressionDescriptor};
@@ -26,22 +28,42 @@ impl ExpressionBuilder {
         }: ComponentExpressionDescriptor,
     ) -> Result<Spanned<PoolId<HirComponentExpression>>> {
         let name = queue.get_plain_type(component.name).identifier;
-        let lowered = queue
-            .lowerer
-            .lower_type(queue, self.file(), component.name, context)?;
+        let lowered = if let Some(self_type) = self.self_type {
+            queue.lowerer.lower_type_with_self(
+                queue,
+                self.file(),
+                component.name,
+                context,
+                self_type,
+            )?
+        } else {
+            queue
+                .lowerer
+                .lower_type(queue, self.file(), component.name, context)?
+        };
         let ty = lowered.term;
+        let ty_view = queue.hir.view(lowered.term);
+        let comp_view = ty_view
+            .nominal()
+            .is_component()
+            .expect("find_type returned non-component type for component name");
+        let concrete_name = queue.hir.types.get_component_name(comp_view.data);
+        let concrete_owner = queue.hir.types.get_component_owner(comp_view.data);
         if queue
             .hir
             .find_component_by_symbol(HirSymbol {
-                owner: lowered.owner,
-                term: name,
+                owner: concrete_owner,
+                term: concrete_name,
             })
             .is_none()
         {
             if let Some(ASTType {
                 owner,
                 content: ASTTypeKind::Component(comp),
-            }) = queue.lowerer.lookup.find_type(self.file(), name)
+            }) = queue
+                .lowerer
+                .lookup
+                .find_type(concrete_owner, concrete_name)
             {
                 let comp = queue.modules.get_entry(owner).component().get(comp);
                 queue.enqueue_component(comp, owner)?;
@@ -49,11 +71,11 @@ impl ExpressionBuilder {
                 return Err(HIRError::component_not_found(name, span));
             }
         }
-        let ty_view = queue.hir.view(lowered.term);
-        let deref = ty_view.dereference();
-        let comp_view = deref
-            .is_component()
-            .expect("find_type returned non-component type for component name");
+
+        let generics: &[TermId] = match ty_view.raw().node() {
+            TermNode::Apply { args, .. } => args.as_slice(),
+            _ => &[],
+        };
 
         let mut properties = Vec::new();
         let mut children = Vec::new();
@@ -65,11 +87,16 @@ impl ExpressionBuilder {
                         .iter()
                         .position(|prop| prop.name == *prop_name) =>
                 {
+                    let expected = crate::generics::substitute_terms(
+                        queue.hir,
+                        generics,
+                        comp_view.props()[position].ty,
+                    );
                     let expr = self.build_expression(
                         queue,
                         ExpressionDescriptor {
                             target: *rhs,
-                            expected: Some(comp_view.props()[position].ty),
+                            expected: Some(expected),
                             context,
                         },
                     )?;

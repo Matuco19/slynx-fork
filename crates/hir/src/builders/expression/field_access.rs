@@ -181,6 +181,33 @@ impl ExpressionBuilder {
                     span,
                 ))
             }
+            _ if let Some(view) = dereferenced_type.is_component()
+                && let Some(position) = view.props().iter().position(|f| f.name == field_name) =>
+            {
+                let field_ty = view.props()[position].data.ty;
+                let field_ty = match view.new_with(field_ty).raw().node() {
+                    TermNode::Apply { args: generics, .. } => {
+                        crate::generics::substitute_terms(queue.hir, generics, field_ty)
+                    }
+                    _ => field_ty,
+                };
+                Ok(HirExpression {
+                    ty: Owned::new(parent_ty.owner, field_ty),
+                    kind: HirExpressionKind::FieldAccess {
+                        expr: parent,
+                        field_index: position,
+                        field_name: Some(field_name),
+                    },
+                })
+            }
+            _ if dereferenced_type.is_component().is_some() => {
+                //is component but could not find any property
+                Err(HIRError::property_unrecognized(
+                    dereferenced_type.data,
+                    vec![field_name],
+                    span,
+                ))
+            }
             _ if dereferenced_type.is_ref()
                 && let Some(view) = concrete_type.is_struct() =>
             {

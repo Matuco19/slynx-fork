@@ -895,7 +895,7 @@ impl Monomorphizer {
         let node = &hir[component.data];
         let substituted_name = substitute_type(hir, node.name, subst)?;
         let ty_view = hir.view(substituted_name);
-        let deref = ty_view.dereference();
+        let deref = ty_view.nominal();
         let new_name =
             if is_resolvable_reference(hir, substituted_name) && deref.is_component().is_some() {
                 self.resolve_component_target(hir, substituted_name, component.span)?

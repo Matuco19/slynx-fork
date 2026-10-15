@@ -384,6 +384,29 @@ fn right_shift_parses_without_panicking() {
     assert_eq!(*rhs_name, symbols.intern("y"));
 }
 
+///`()` is the empty tuple (unit) type, not a parenthesized expression
+///It must parse both as a type annotation and as a literal (see #167 issue)
+#[test]
+fn empty_tuple_type_and_literal_parse() {
+    let (program, symbols, types, statements, expressions) = parse_program("func g(): () { () }");
+
+    let func: &FuncDeclaration = program.get_pool().get(PoolId::new(0));
+    let Type::Plain(unit) = &types[func.return_type.data] else {
+        panic!("expected the return type to be a plain type");
+    };
+    assert_eq!(symbols.get_name(unit.identifier), "()");
+    assert!(unit.generic.is_empty());
+
+    assert_eq!(func.body.len(), 1);
+    let ASTStatement::Expression(expr) = &statements[func.body[0].data] else {
+        panic!("expected an expression statement");
+    };
+    let ASTExpression::Tuple(fields) = &expressions[expr.data] else {
+        panic!("expected an empty tuple literal");
+    };
+    assert!(fields.is_empty());
+}
+
 #[test]
 fn chained_right_shift_parses_without_panicking() {
     // After consuming the two `>` tokens of the first `>>`, the loop must

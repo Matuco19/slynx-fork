@@ -214,13 +214,21 @@ impl Parser<'_> {
                     current.span,
                 )),
                 TokenKind::LParen => {
-                    let first = self.parse_expression(type_params, flags)?;
-                    if self.peek()?.kind == TokenKind::Comma {
-                        self.eat()?;
-                        self.parse_tuple_with_first(first, type_params, flags)
+                    // The empty tuple `()` has no first expression to parse
+                    if self.peek()?.kind == TokenKind::RParen {
+                        let end = self.expect(&TokenKind::RParen)?.span;
+                        let span = current.span.merge_with(end);
+                        let id = self.intern_expression(ASTExpression::Tuple(SmallVec::new()));
+                        Ok(Spanned::new(id, span))
                     } else {
-                        self.expect(&TokenKind::RParen)?;
-                        Ok(first)
+                        let first = self.parse_expression(type_params, flags)?;
+                        if self.peek()?.kind == TokenKind::Comma {
+                            self.eat()?;
+                            self.parse_tuple_with_first(first, type_params, flags)
+                        } else {
+                            self.expect(&TokenKind::RParen)?;
+                            Ok(first)
+                        }
                     }
                 }
 

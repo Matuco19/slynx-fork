@@ -12,6 +12,12 @@ impl<'a> HirQueueBuilder<'a> {
         ty: Spanned<DedupPoolId<Type>>,
     ) -> Result<()> {
         match self.modules.get_type(ty.data) {
+            // Tuple types are anonymous, so they have no declaration whose arity could mismatch, only their fields need checking
+            Type::Plain(identifier) if identifier.identifier == self.hir.intern_name("()") => {
+                for generic in &identifier.generic {
+                    self.assert_concrete_type_generic_count(owner, *generic)?;
+                }
+            }
             Type::Plain(identifier)
                 if let Some(ast_ty) =
                     self.lowerer.lookup.find_type(owner, identifier.identifier) =>

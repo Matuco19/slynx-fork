@@ -3,14 +3,13 @@ use slynx_lexer::{Token, TokenKind};
 
 use crate::{
     ASTExpression, ASTStatement, ExpectedContent, ParseError, Parser, Result, SymbolPointer, Type,
-    flags::ParserFlag,
 };
 
 impl<'a> Parser<'a> {
     pub fn intern(&self, name: &str) -> SymbolPointer {
         self.symbols.intern(name)
     }
-    pub fn intern_statment(&self, stmt: ASTStatement) -> DedupPoolId<ASTStatement> {
+    pub fn intern_statement(&self, stmt: ASTStatement) -> DedupPoolId<ASTStatement> {
         self.statements.insert(stmt)
     }
     pub fn intern_expression(&self, expr: ASTExpression) -> DedupPoolId<ASTExpression> {
@@ -19,22 +18,13 @@ impl<'a> Parser<'a> {
     pub fn intern_type(&self, name: Type) -> DedupPoolId<Type> {
         self.types.insert(name)
     }
-    pub fn reset_flags(&mut self) {
-        self.flags.reset();
-    }
-    pub fn add_flag(&mut self, flag: ParserFlag) {
-        self.flags.set_flag(flag);
-    }
-    pub fn remove_flag(&mut self, flag: ParserFlag) {
-        self.flags.remove_flag(flag);
-    }
-    pub fn has_flag(&self, flag: ParserFlag) -> bool {
-        self.flags.has_flag(flag)
-    }
+
     /// Consumes the next token from the input stream and returns it.
     /// If the end of the input stream is reached, it returns an error indicating that there
     pub fn eat(&mut self) -> Result<Token> {
-        self.stream.next().ok_or(ParseError::UnexpectedEndOfInput)
+        self.stream
+            .next()
+            .ok_or(ParseError::unexpected_end_of_input())
     }
 
     /// Peeks at the token at the specified index without consuming it.
@@ -43,7 +33,7 @@ impl<'a> Parser<'a> {
         self.stream
             .stream
             .get(idx)
-            .ok_or(ParseError::UnexpectedEndOfInput)
+            .ok_or(ParseError::unexpected_end_of_input())
     }
 
     /// Peeks at the next token without consuming it.
@@ -51,6 +41,16 @@ impl<'a> Parser<'a> {
     pub fn peek(&self) -> Result<&Token> {
         self.peek_at(0)
     }
+
+    /// Same as [`Self::peek_at`], but yields `None` instead of failing once the
+    /// stream is exhausted. Two-token lookaheads must use this: running out of
+    /// input is a normal outcome for a lookahead, and reporting it as
+    /// `UnexpectedEndOfInput` would abort a declaration that is otherwise
+    /// complete.
+    pub fn peek_at_opt(&self, idx: usize) -> Option<&Token> {
+        self.stream.stream.get(idx)
+    }
+
     /// Consumes the next token and checks if it matches the expected `kind`.
     /// If it does, it returns the token; otherwise, it returns an error indicating the mismatch.
     /// The error message will specify what kind of token was expected, providing clarity for debugging purposes.
@@ -66,11 +66,28 @@ impl<'a> Parser<'a> {
                 TokenKind::String(_) => "Instead was expecting a string literal".to_string(),
                 _ => format!("'{kind:?}'",),
             };
-            Err(ParseError::UnexpectedToken(
-                token,
-                ExpectedContent::Raw(kind),
-            ))
+            self.unexpected_with(kind, token)
         }
+    }
+
+    /// Builds an [`ParseError::UnexpectedToken`] error from the *next* token
+    /// (which is consumed) and returns it as a `T`-typed failure. `msg` is the
+    /// text explaining what was expected instead.
+    pub fn unexpected<T>(&mut self, msg: impl Into<String>) -> Result<T> {
+        Err(ParseError::unexpected_token(
+            self.eat()?,
+            ExpectedContent::Raw(msg.into()),
+        ))
+    }
+
+    /// Builds an [`ParseError::UnexpectedToken`] error from an already-consumed
+    /// `token` and returns it as a `T`-typed failure. `msg` is the text
+    /// explaining what was expected instead.
+    pub fn unexpected_with<T>(&mut self, msg: impl Into<String>, token: Token) -> Result<T> {
+        Err(ParseError::unexpected_token(
+            token,
+            ExpectedContent::Raw(msg.into()),
+        ))
     }
 
     ///Does the same as `self.expect()` but expecting specifically an identifier
@@ -96,5 +113,42 @@ impl<'a> Parser<'a> {
         };
         let name = self.intern(&name);
         Ok((name, span))
+    }
+
+    ///Parses a list of `item`s separated by `sep` and ending at `term`, which
+    ///is left unconsumed. When `allow_trailing` is set, a separator directly
+    ///before the terminator (i.e. a trailing comma) is accepted. On every other
+    ///token after an item the list stops, so malformed input is rejected either
+    ///here or by the caller expecting the `term`inator.
+    pub fn parse_separated<T>(
+        &mut self,
+        term: TokenKind,
+        sep: TokenKind,
+        allow_trailing: bool,
+        mut item: impl FnMut(&mut Self) -> Result<T>,
+    ) -> Result<Vec<T>> {
+        let mut out = Vec::new();
+        let mut after_separator = false;
+        loop {
+            if self.peek()?.kind == term {
+                if !allow_trailing && after_separator {
+                    return self.unexpected(format!("Was expecting an item before '{term:?}'"));
+                }
+                break;
+            }
+            out.push(item(self)?);
+            match self.peek()?.kind {
+                ref kind if kind == &sep => {
+                    self.eat()?;
+                    after_separator = true;
+                }
+                ref kind if kind == &term => break,
+                _ if allow_trailing => after_separator = false,
+                _ => {
+                    return self.unexpected(format!("Was expecting a ',' or '{term:?}'"));
+                }
+            }
+        }
+        Ok(out)
     }
 }

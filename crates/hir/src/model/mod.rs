@@ -58,3 +58,27 @@ pub use declarations::*;
 pub use expression::*;
 pub use statements::*;
 pub use types::*;
+
+use crate::{
+    DeclarationId, SymbolPointer,
+    context::{LangItems, LangMap},
+    id::AnyDeclarationId,
+    term::TermId,
+};
+
+pub trait HirDeclaration: std::fmt::Debug {
+    fn attributes(&self) -> &[HirAttribute];
+    fn attributes_mut(&mut self) -> &mut Vec<HirAttribute>;
+}
+
+///A declaration on the hir that represents a type
+pub trait TypeDeclaration: HirDeclaration + Sized {
+    fn hir_type(&self) -> TermId;
+    fn generics(&self) -> &[GenericParameter];
+    fn as_any_id(id: DeclarationId<Self>) -> AnyDeclarationId;
+    fn name(&self) -> SymbolPointer;
+}
+
+pub trait LanguageItem: std::fmt::Debug + Sized + HirDeclaration {
+    fn map(items: &LangItems) -> &LangMap<Self>;
+}

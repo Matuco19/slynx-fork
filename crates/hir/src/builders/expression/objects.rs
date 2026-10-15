@@ -1,10 +1,13 @@
 use std::collections::HashMap;
 
-use common::{Span, Spanned, VisibilityModifier, pool::DedupPoolId};
+use common::{Span, Spanned, pool::DedupPoolId};
+use module_loader::FileId;
 use slynx_parser::{NamedExpr, Type, TypeContext};
 
 use crate::{
-    HIRError, HirExpression, HirExpressionKind, HirType, Result, builders::HirQueueBuilder,
+    HIRError, HirExpression, HirExpressionKind, Owned, Result,
+    builders::HirQueueBuilder,
+    term::{TermId, TermNode},
 };
 
 use super::{ExpressionBuilder, ExpressionDescriptor};
@@ -18,9 +21,10 @@ pub struct ObjectDescriptor<'a> {
     ///The span of the object literal, used for error reporting
     pub span: Span,
     ///The expected type of the object, if known
-    pub expected: Option<DedupPoolId<HirType>>,
+    pub expected: Option<TermId>,
     ///The type context used to resolve types
     pub context: &'a TypeContext<'a>,
+    pub requester: FileId,
 }
 
 impl ExpressionBuilder {
@@ -35,43 +39,37 @@ impl ExpressionBuilder {
             span,
             expected,
             context,
+            requester,
         } = descriptor;
 
         let ty = if let Some(self_type) = &self.self_type {
-            queue.find_self_type(name.data, *self_type)
+            queue
+                .lowerer
+                .lower_type_with_self(queue, self.file(), name, context, *self_type)?
         } else {
-            queue.get_node(self.file()).find_type(name, context)?.1
+            queue
+                .lowerer
+                .lower_type(queue, self.file(), name, context)?
         };
-        let ty_view = queue.hir.view(ty);
-        let deref = ty_view.dereference();
+        let ty_view = queue.hir.view(ty.term);
+        let deref = ty_view.nominal();
         let obj = deref
             .is_struct()
             .expect("Expected name to generate a struct type");
 
-        // A generic object literal written without explicit type
-        // arguments (`Wrapper(data: 5)`) resolves to the raw template
-        // struct type, leaving its fields as `GenericParam`s. When the
-        // expected type is a concrete reference to the same struct,
-        // adopt it so the template's generic fields resolve against the
-        // type arguments.
-        let ty = match ty_view.raw() {
-            HirType::Reference { .. } => ty,
-            _ => match expected {
-                Some(expected_ty)
-                    if queue.hir.view(expected_ty).dereference().data == deref.data
-                        && matches!(
-                            queue.hir.view(expected_ty).raw(),
-                            HirType::Reference { .. }
-                        ) =>
-                {
-                    expected_ty
-                }
-                _ => ty,
-            },
+        let concrete = match ty_view.raw().node() {
+            TermNode::Apply { .. } => ty.term,
+            _ if let Some(expected) = expected
+                && queue.hir.view(expected).dereference().data() == deref.data()
+                && let TermNode::Apply { .. } = queue.hir.view(expected).raw().node() =>
+            {
+                expected
+            }
+            _ => ty.term,
         };
-        let ty_view = queue.hir.view(ty);
-        let generics: &[DedupPoolId<HirType>] = match ty_view.raw() {
-            HirType::Reference { generics, .. } => generics.as_slice(),
+        let ty_view = queue.hir.view(concrete);
+        let generics: &[TermId] = match ty_view.raw().node() {
+            TermNode::Apply { args, .. } => args.as_slice(),
             _ => &[],
         };
 
@@ -79,20 +77,22 @@ impl ExpressionBuilder {
             .fields()
             .iter()
             .enumerate()
-            .map(|(i, s)| (s.data, (i, s.visibility)))
+            .map(|(i, s)| (s.data.name, (i, s)))
             .collect();
         let mut ordered = vec![None; obj.fields().len()];
 
         for field in fields {
-            let (idx, visibility) =
+            let (idx, visible) =
                 *type_names
                     .get(&field.data.name)
                     .ok_or(HIRError::property_unrecognized(
-                        ty,
+                        ty.term,
                         vec![field.data.name],
                         field.span,
                     ))?;
-            if visibility != VisibilityModifier::Public {
+            // A field is visible when it is `pub`, or when the literal sits in
+            // the file that declared it.
+            if !visible.is_visible(requester) {
                 return Err(HIRError::not_visible_property(field.data.name, field.span));
             }
 
@@ -113,10 +113,10 @@ impl ExpressionBuilder {
                             .get(&fieldname)
                             .expect("Field name should've been added into type names");
 
-                        let field_ty = crate::generics::substitute_types(
+                        let field_ty = crate::generics::substitute_terms(
                             queue.hir,
                             generics,
-                            obj.field_types()[*idx],
+                            obj.fields()[*idx].data.ty,
                         );
                         self.build_expression(
                             queue,
@@ -127,7 +127,7 @@ impl ExpressionBuilder {
                             },
                         )?
                     }),
-                    None => missing.push(obj.fields()[i].data),
+                    None => missing.push(obj.fields()[i].data.name),
                 }
             }
 
@@ -138,8 +138,11 @@ impl ExpressionBuilder {
         };
 
         Ok(HirExpression {
-            ty,
-            kind: HirExpressionKind::Object { name: ty, fields },
+            ty: Owned::new(ty.owner, concrete),
+            kind: HirExpressionKind::Object {
+                name: concrete,
+                fields,
+            },
         })
     }
 }

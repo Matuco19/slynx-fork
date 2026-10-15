@@ -1,171 +1,177 @@
-use common::{
-    Span,
-    pool::{DedupPoolId, PoolId},
-};
+//! Enum monomorphization.
+//!
+//! A generic enum template (`enum Option<T> { None, Some(T) }`) is specialized
+//! by [`resolve_enum_target`](Monomorphizer::resolve_enum_target): for one
+//! concrete type-argument list it creates (or retrieves from the cache) a new
+//! enum type with substituted payload types plus a mangled, non-generic
+//! `HirEnumDeclaration`, so codegen hoists a distinct IR enum for it.
+//!
+//! This module also owns the neutralization of the enum templates that
+//! survive the pass
+//! ([`neutralize_generic_enums`](Monomorphizer::neutralize_generic_enums)).
+
+use common::Span;
+use module_loader::FileId;
 use slynx_hir::{
-    EnumVariantType, HIRError, HirEnumDeclaration, HirType, Result, SlynxHir,
-    id::{AnyDeclarationId, AnyLocalDeclarationId},
+    DeclarationId, EnumVariantType, HIRError, HirEnumDeclaration, Result, SlynxHir, SymbolPointer,
+    term::{TermId, TermNode},
 };
 
 use crate::{
     Monomorphizer,
-    types::{MonomorphizationKey, Substitution, mangle_name, substitute_type},
+    specialization::SpecializationDescriptor,
+    types::{MonomorphizationKey, Substitution, substitute_type},
 };
+
 impl Monomorphizer {
-    pub fn resolve_enum_target(
+    ///Given the type of a generic enum usage such as `Option<int>`, returns
+    ///the specialized enum type, generating a mangled `HirEnumDeclaration` on
+    ///first use and deduplicating identical instantiations afterwards.
+    ///
+    ///The request is handed to the shared
+    ///[`specialize`](Monomorphizer::specialize) skeleton as a
+    ///[`SpecializationDescriptor`]; the skeleton reads the template's name and
+    ///generic arity itself, and the resulting typed id is narrowed to the
+    ///specialization's enum type for the caller.
+    ///
+    ///# Arguments
+    ///
+    ///* `hir` — the HIR being monomorphized; the declaration is inserted into
+    ///  the template's file so codegen hoists it next to its template.
+    ///* `ty` — the concrete type application (`Option<int>`) to specialize.
+    ///* `span` — the use-site span, reported when `ty` is not a type
+    ///  application, when the target is not an enum, and on arity or cycle
+    ///  errors.
+    ///
+    ///# Returns
+    ///
+    ///The enum type of the concrete copy — freshly generated or served from
+    ///the cache.
+    pub(crate) fn resolve_enum_target(
         &mut self,
         hir: &SlynxHir,
-        ty: DedupPoolId<HirType>,
+        ty: TermId,
         span: Span,
-    ) -> Result<DedupPoolId<HirType>> {
+    ) -> Result<TermId> {
         let view = hir.view(ty);
-        let HirType::Reference { rf, generics } = view.raw() else {
+        let TermNode::Apply { target, args } = view.raw().node() else {
             return Err(HIRError::not_an_enum(ty, span));
         };
-        let reference_view = hir.view(*rf);
+        let reference_view = hir.view(*target);
         let deref = reference_view.dereference();
         let Some(enum_view) = deref.is_enum() else {
-            return Err(HIRError::not_an_enum(*rf, span));
+            return Err(HIRError::not_an_enum(*target, span));
         };
         let name = enum_view.name();
-        let Some((template_file, template_local)) = self.find_enum_declaration_by_name(hir, name)
-        else {
+
+        let Some(template) = self.find_declaration_by_name::<HirEnumDeclaration>(hir, name) else {
             unreachable!("Every generic enum type must have a HirEnumDeclaration")
         };
-        let template_any =
-            AnyDeclarationId::new(template_file, AnyLocalDeclarationId::Enum(template_local));
+        let owner = template.owner;
 
-        let (template_generics, visibility, decl_variants) = {
-            let file = hir.get_file(template_file);
-            let declaration = &file.declarations.declarations.enums[template_local];
+        let (visibility, decl_variants, span) = {
+            let file = hir.get_file(owner);
+            let declaration = &file.declarations.declarations.enums[template.term];
             (
-                declaration.generics.clone(),
                 declaration.visibility,
                 declaration.variants.clone(),
+                declaration.span,
             )
         };
 
-        let args: Vec<DedupPoolId<HirType>> = generics
+        let args: Vec<TermId> = args
             .iter()
             .copied()
             .filter(|slot| !slot.is_null())
             .collect();
-        if template_generics.len() != args.len() {
-            return Err(HIRError::generic_arity_mismatch(
-                name,
-                template_generics.len(),
-                args.len(),
+
+        let specialized = self.specialize(
+            hir,
+            SpecializationDescriptor {
+                template,
+                args,
                 span,
-            ));
-        }
+                build: |monomorphizer: &mut Monomorphizer,
+                        hir: &SlynxHir,
+                        subst: &Substitution,
+                        mangled_symbol: SymbolPointer,
+                        _: &MonomorphizationKey| {
+                    let type_variants = {
+                        enum_view
+                            .variants()
+                            .iter()
+                            .map(|variant| {
+                                let payload = variant
+                                    .payload
+                                    .iter()
+                                    .map(|ty| {
+                                        let ty = substitute_type(hir, *ty, subst)?;
+                                        monomorphizer.resolve_expression_type(hir, ty, span)
+                                    })
+                                    .collect::<Result<Vec<_>>>()?;
+                                Ok(EnumVariantType {
+                                    name: variant.name,
+                                    discriminant: variant.discriminant,
+                                    payload,
+                                })
+                            })
+                            .collect::<Result<Vec<_>>>()?
+                    };
 
-        let key: MonomorphizationKey = (template_any, args.clone().into());
-        if let Some(cached) = self.cache.get(&key) {
-            let AnyLocalDeclarationId::Enum(local_id) = cached.local_id else {
-                unreachable!("A monomorphized enum target must be an enum")
-            };
-            return Ok(hir.get_file(cached.file_id).declarations.declarations.enums[local_id].ty);
-        }
-        if self.in_progress.contains(&key) {
-            return Err(HIRError::cyclic_monomorphization(name, args, span));
-        }
-        self.in_progress.insert(key.clone());
+                    let specialized_ty = hir.types.create_enum_type(mangled_symbol, type_variants);
 
-        let subst = Substitution::new(&args);
-        let type_variants = {
-            enum_view
-                .variants()
-                .iter()
-                .map(|variant| {
-                    let payload = variant
-                        .payload
-                        .iter()
-                        .map(|ty| {
-                            let ty = substitute_type(hir, *ty, &subst)?;
-                            self.resolve_expression_type(hir, ty, span)
-                        })
-                        .collect::<Result<Vec<_>>>()?;
-                    Ok(EnumVariantType {
-                        name: variant.name,
-                        discriminant: variant.discriminant,
-                        payload,
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?
-        };
+                    let specialized_local = {
+                        let file = hir.get_file_mut(owner);
+                        file.declarations
+                            .declarations
+                            .enums
+                            .insert(HirEnumDeclaration {
+                                name: mangled_symbol,
+                                span,
+                                generics: Vec::new(),
+                                ty: specialized_ty,
+                                visibility,
+                                variants: decl_variants,
+                                attributes: Vec::new(),
+                            })
+                    };
 
-        let mangled_name = mangle_name(hir, name, &args);
-        let mangled_symbol = hir.intern_name(&mangled_name);
-        let specialized_ty = hir.create_enum_type(mangled_symbol, type_variants);
+                    Ok(DeclarationId::new(owner, specialized_local))
+                },
+            },
+        )?;
 
-        let specialized_local = {
-            let file = hir.get_file_mut(template_file);
-            file.declarations
-                .declarations
-                .enums
-                .insert(HirEnumDeclaration {
-                    name: mangled_symbol,
-                    generics: Vec::new(),
-                    ty: specialized_ty,
-                    visibility,
-                    variants: decl_variants,
-                    attributes: Vec::new(),
-                })
-        };
-        let specialized = AnyDeclarationId::new(
-            template_file,
-            AnyLocalDeclarationId::Enum(specialized_local),
-        );
-
-        self.cache.insert(key.clone(), specialized);
-        self.in_progress.remove(&key);
-        self.dead_code.insert(template_any);
-
-        Ok(specialized_ty)
+        let file = hir.get_file(specialized.owner);
+        Ok(file.declarations.declarations.enums[specialized.term].ty)
     }
-    ///Finds the `HirObjectDeclaration` with the given `name` in any file.
-    fn find_enum_declaration_by_name(
-        &self,
-        hir: &SlynxHir,
-        name: slynx_hir::SymbolPointer,
-    ) -> Option<(module_loader::FileId, PoolId<HirEnumDeclaration>)> {
-        for file in hir.files.iter() {
-            for (id, declaration) in file.declarations.declarations.enums.iter().with_ids() {
-                if declaration.name == name {
-                    return Some((file.file, id));
-                }
-            }
-        }
-        None
-    }
-    ///Neutralizes every generic object template and marks it as dead.
+
+    ///Neutralizes every generic *enum* template: empties its variant list and
+    ///retypes it to `void_ty`, then records it as dead code.
+    ///
+    ///After this runs no enum declaration in the HIR carries a
+    ///`GenericParam`-typed signature, so codegen never sees one. Templates
+    ///that were instantiated during the pass are neutralized too — their
+    ///concrete specializations exist alongside them and are the declarations
+    ///codegen emits.
+    ///
+    ///# Arguments
+    ///
+    ///* `hir` — the HIR whose enum templates are neutralized.
+    ///* `files` — the files to scan for generic templates.
+    ///* `void_ty` — the concrete, non-generic type every neutralized template
+    ///  is retyped to.
     pub(crate) fn neutralize_generic_enums(
         &mut self,
         hir: &SlynxHir,
-        files: &[module_loader::FileId],
-        void_ty: DedupPoolId<HirType>,
+        files: &[FileId],
+        void_ty: TermId,
     ) {
-        for file_id in files {
-            let generic_ids: Vec<PoolId<HirEnumDeclaration>> = {
-                let file = hir.get_file(*file_id);
-                file.declarations
-                    .declarations
-                    .enums
-                    .iter()
-                    .with_ids()
-                    .filter(|(_, declaration)| !declaration.generics.is_empty())
-                    .map(|(id, _)| id)
-                    .collect()
-            };
-
-            for local_id in generic_ids {
-                let mut file = hir.get_file_mut(*file_id);
-                file.declarations.declarations.enums.get_mut(local_id).ty = void_ty;
-                self.dead_code.insert(AnyDeclarationId::new(
-                    *file_id,
-                    AnyLocalDeclarationId::Enum(local_id),
-                ));
-            }
+        for template in self.generic_templates::<HirEnumDeclaration>(hir, files) {
+            let mut file = hir.get_file_mut(template.owner);
+            let declaration = file.declarations.declarations.enums.get_mut(template.term);
+            declaration.variants = Vec::new();
+            declaration.ty = void_ty;
+            self.mark_dead(template);
         }
     }
 }

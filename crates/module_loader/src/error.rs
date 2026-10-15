@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    backtrace::Backtrace,
+    path::{Path, PathBuf},
+};
 
 use common::Span;
 use slynx_lexer::LexerError;
@@ -6,15 +9,16 @@ use slynx_parser::ParseError;
 
 #[derive(Debug)]
 pub enum SourceErrorKind {
-    InexsitantSource(std::io::Error, Span, PathBuf),
+    InexistantSource(std::io::Error, Span, PathBuf),
     Lexing(LexerError),
     Parsing(ParseError),
 }
 
 #[derive(Debug)]
 pub struct SourceError {
-    kind: SourceErrorKind,
+    kind: Box<SourceErrorKind>,
     entry: PathBuf,
+    backtrace: Box<Backtrace>,
 }
 
 impl SourceError {
@@ -26,22 +30,34 @@ impl SourceError {
         span: Span,
     ) -> Self {
         Self {
-            kind: SourceErrorKind::InexsitantSource(e, span, generator),
+            kind: Box::new(SourceErrorKind::InexistantSource(e, span, generator)),
             entry: entry.clone(),
+            backtrace: Box::new(Backtrace::capture()),
         }
     }
     pub fn lexing(e: LexerError, entry: PathBuf) -> Self {
         Self {
-            kind: SourceErrorKind::Lexing(e),
+            kind: Box::new(SourceErrorKind::Lexing(e)),
             entry: entry.clone(),
+            backtrace: Box::new(Backtrace::capture()),
         }
     }
     pub fn parsing(e: ParseError, entry: PathBuf) -> Self {
         Self {
-            kind: SourceErrorKind::Parsing(e),
+            kind: Box::new(SourceErrorKind::Parsing(e)),
             entry: entry.clone(),
+            backtrace: Box::new(Backtrace::capture()),
         }
     }
+
+    pub fn backtrace(self) -> Backtrace {
+        if let SourceErrorKind::Parsing(e) = *self.kind {
+            e.backtrace
+        } else {
+            *self.backtrace
+        }
+    }
+
     pub fn kind(&self) -> &SourceErrorKind {
         &self.kind
     }

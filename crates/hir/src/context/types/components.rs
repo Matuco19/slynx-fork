@@ -4,39 +4,42 @@ use common::{
     dedup_pooled,
     pool::{DedupPool, DedupPoolId},
 };
+use module_loader::FileId;
 
-use crate::{ComponentType, HirType, SymbolPointer};
-
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub struct ComponentDefinition {
-    pub(crate) name: SymbolPointer,
-    pub(crate) properties: Vec<SymbolPointer>,
-}
+use crate::{ComponentType, StructField, SymbolPointer, Visible, term::TermId};
+use common::DedupPoolStorage;
 
 dedup_pooled!(pub ComponentsPool {
     components: ComponentType,
-    bodies: ComponentDefinition
 });
 
 impl ComponentsPool {
-    pub fn insert(
+    pub fn insert_component(
         &self,
         name: SymbolPointer,
-        properties: Vec<(SymbolPointer, DedupPoolId<HirType>)>,
+        owner: FileId,
+        properties: Vec<(SymbolPointer, TermId)>,
         children: Vec<DedupPoolId<ComponentType>>,
-    ) -> (DedupPoolId<ComponentType>, DedupPoolId<ComponentDefinition>) {
-        let (names, properties) = properties.into_iter().unzip();
-        let def = self.bodies.insert(ComponentDefinition {
-            name,
-            properties: names,
-        });
+    ) -> DedupPoolId<ComponentType> {
         let s = ComponentType {
-            properties,
+            name,
+            owner,
+            properties: properties
+                .into_iter()
+                .map(|property| {
+                    Visible::new(
+                        common::VisibilityModifier::Public,
+                        owner,
+                        StructField {
+                            ty: property.1,
+                            name: property.0,
+                        },
+                    )
+                })
+                .collect(),
             children,
-            metadata: def,
         };
-        let comp = self.components.insert(s);
-        (comp, def)
+        self.components.insert(s)
     }
 }
 
@@ -44,7 +47,6 @@ impl Debug for ComponentsPool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ComponentsPools")
             .field("components", &self.components)
-            .field("bodies", &self.bodies)
             .finish()
     }
 }

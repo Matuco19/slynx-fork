@@ -12,31 +12,37 @@ use module_loader::FileId;
 use slynx_parser::{ASTExpression, TypeContext};
 
 use crate::{
-    HIRError, HirExpression, HirExpressionKind, HirStatement, HirType, Result, SymbolPointer,
+    HIRError, HirExpression, HirExpressionKind, HirStatement, Owned, Result, SymbolPointer,
     VariableId,
     builders::{
         HirQueueBuilder,
         expression::{
             calls::{FunctionCallDescriptor, FunctionTarget},
+            collections::{
+                IndexExpressionDescriptor, SequenceExpressionDescriptor, TupleAccessDescriptor,
+            },
+            components::ComponentExpressionDescriptor,
             field_access::FieldAccessDescriptor,
             literals::{DereferenceExpressionDescriptor, ReferenceExpressionDescriptor},
         },
     },
     context::ScopeContext,
     id::OwnerId,
+    term::{Term, TermId, TermNode},
 };
 
-mod calls;
-mod collections;
-mod components;
-mod control_flow;
-mod enums;
-mod field_access;
-mod literals;
-mod names;
-mod objects;
-mod statements;
-mod typing;
+pub mod calls;
+pub mod collections;
+pub mod components;
+pub mod control_flow;
+pub mod enums;
+pub mod field_access;
+pub mod literals;
+pub mod names;
+pub mod objects;
+pub mod resolution;
+pub mod statements;
+pub mod typing;
 
 use self::{control_flow::IfExpressionDescriptor, objects::ObjectDescriptor};
 
@@ -45,7 +51,7 @@ pub struct ExpressionDescriptor<'a> {
     ///The AST expression to build
     pub target: Spanned<DedupPoolId<ASTExpression>>,
     ///The expected type of the expression, if known
-    pub expected: Option<DedupPoolId<HirType>>,
+    pub expected: Option<TermId>,
     ///The type context used to resolve types
     pub context: &'a TypeContext<'a>,
 }
@@ -59,7 +65,7 @@ pub(crate) struct ExpressionBuildResult {
 #[derive(Debug)]
 pub struct VariableInfo {
     pub name: SymbolPointer,
-    pub type_id: DedupPoolId<HirType>,
+    pub type_id: TermId,
     pub mutable: bool,
 }
 
@@ -86,11 +92,21 @@ impl DerefMut for VariablesManager {
 pub(crate) struct ExpressionBuilder {
     pub(crate) target: OwnerId,
     pub(crate) variables: VariablesManager,
-    pub(crate) self_type: Option<DedupPoolId<HirType>>,
+    pub(crate) self_type: Option<TermId>,
+}
+///Macro for getting the generic arguments of a function or component inside an expression builder
+#[macro_export]
+macro_rules! generic_args {
+    ($self:ident, $q:ident) => {
+        match $self.target {
+            OwnerId::Function(f) => $q.hir.get_function(f).generics,
+            OwnerId::Component(c) => $q.hir.get_component(c).generics,
+        }
+    };
 }
 
 impl ExpressionBuilder {
-    pub fn new(owner: OwnerId, self_type: Option<DedupPoolId<HirType>>) -> Self {
+    pub fn new(owner: OwnerId, self_type: Option<TermId>) -> Self {
         Self {
             target: owner,
             variables: VariablesManager::default(),
@@ -100,8 +116,8 @@ impl ExpressionBuilder {
 
     pub fn file(&self) -> FileId {
         match self.target {
-            OwnerId::Component(c) => c.file_id,
-            OwnerId::Function(f) => f.file_id,
+            OwnerId::Component(c) => c.owner,
+            OwnerId::Function(f) => f.owner,
         }
     }
 
@@ -119,7 +135,7 @@ impl ExpressionBuilder {
         name: SymbolPointer,
         id: VariableId,
         mutable: bool,
-        ty: DedupPoolId<HirType>,
+        ty: TermId,
     ) {
         self.variables.scope.create_name(name, id, mutable);
         self.variables.insert(
@@ -136,7 +152,7 @@ impl ExpressionBuilder {
         &mut self,
         name: SymbolPointer,
         mutable: bool,
-        ty: DedupPoolId<HirType>,
+        ty: TermId,
     ) -> VariableId {
         let id = VariableId::new(self.target, self.variables.scope.variable_count() as u16);
         self.create_mapped_variable(name, id, mutable, ty);
@@ -150,23 +166,26 @@ impl ExpressionBuilder {
     ) -> Result<()> {
         let expression = &queue.hir[expr.data];
         match expression.kind {
-            HirExpressionKind::Identifier(ident) => {
-                if let HirType::MutableRef(_) = queue.hir.view(expr.data).ty_viewer().raw() {
-                    return Ok(());
-                }
+            HirExpressionKind::Identifier(_)
+                if let TermNode::Ref { mutable: true, .. } =
+                    queue.hir.view(expr.data).ty_viewer().raw().node() =>
+            {
+                Ok(())
+            }
+            HirExpressionKind::Identifier(ident)
                 if self
                     .variables
                     .variables
                     .get(&ident)
-                    .is_some_and(|info| info.mutable)
-                {
-                    Ok(())
-                } else {
-                    let name = self.variable_name(ident).expect(
+                    .is_some_and(|info| info.mutable) =>
+            {
+                Ok(())
+            }
+            HirExpressionKind::Identifier(ident) => {
+                let name = self.variable_name(ident).expect(
                         "name of variable should be visible. Something is creating a variable on function builders, but for some reason not defining them on the builder names",
                     );
-                    Err(HIRError::invalid_variable_write(name, expr.span))
-                }
+                Err(HIRError::invalid_variable_write(name, expr.span))
             }
 
             HirExpressionKind::FieldAccess { expr, .. } => {
@@ -219,19 +238,31 @@ impl ExpressionBuilder {
                     },
                 );
             }
-            ASTExpression::Null => self.build_null(queue, target.span, expected)?,
-            ASTExpression::IndexExpression(expr, range) => {
-                self.build_index(queue, *expr, range, expected, target.span, context)?
-            }
+
+            ASTExpression::IndexExpression(expr, range) => self.build_index(
+                queue,
+                IndexExpressionDescriptor {
+                    span: target.span,
+                    expr: *expr,
+                    range,
+                    expected,
+                    context,
+                },
+            )?,
             ASTExpression::False => self.build_bool(queue, false),
             ASTExpression::True => self.build_bool(queue, true),
             ASTExpression::Identifier(name) => self.build_identifier(queue, *name, target.span)?,
             ASTExpression::IntLiteral(i) => self.build_int_literal(queue, *i),
             ASTExpression::FloatLiteral(f) => self.build_float_literal(queue, f.into_inner()),
             ASTExpression::StringLiteral(s) => self.build_str_literal(queue, *s),
-            ASTExpression::Tuple(fields) => {
-                self.build_tuple_expression(queue, fields, expected, context)?
-            }
+            ASTExpression::Tuple(fields) => self.build_tuple_expression(
+                queue,
+                collections::TupleExpressionDescriptor {
+                    context,
+                    expected,
+                    fields,
+                },
+            )?,
 
             ASTExpression::FieldAccess { parent, field } => {
                 return self.build_field_access(
@@ -247,11 +278,13 @@ impl ExpressionBuilder {
             }
             ASTExpression::TupleAccess { tuple, index } => self.build_tuple_access(
                 queue,
-                *tuple,
-                expected,
-                target.span,
-                *index as usize,
-                context,
+                TupleAccessDescriptor {
+                    tuple: *tuple,
+                    expected,
+                    span: target.span,
+                    index: *index as usize,
+                    context,
+                },
             )?,
             ASTExpression::Binary { lhs, op, rhs } => {
                 let lhs = self.build_expression(
@@ -272,13 +305,15 @@ impl ExpressionBuilder {
                 )?;
                 let lhs_ty = queue.hir.view(lhs.data).ty();
                 let rhs_ty = queue.hir.view(rhs.data).ty();
-                let ty = self.unify_types(queue, lhs_ty, rhs_ty, target.span)?;
+                let ty = self.unify_terms(queue, lhs_ty.term, rhs_ty.term, target.span)?;
                 let ty = if op.is_logical() {
-                    queue.hir.create_type(HirType::Bool)
+                    queue.hir.types.create_type(Term::boolean_type())
                 } else {
                     ty
                 };
-                queue.hir.create_binary_expression(lhs, rhs, *op, ty)
+                queue
+                    .hir
+                    .create_binary_expression(self.file(), lhs, rhs, *op, ty)
             }
             ASTExpression::FunctionCall { name, args } => {
                 let identifier = queue.get_plain_type(*name);
@@ -325,10 +360,16 @@ impl ExpressionBuilder {
                 },
             )?,
             ASTExpression::Component(component) => {
-                let child =
-                    self.build_component_expression(queue, component, target.span, context)?;
+                let child = self.build_component_expression(
+                    queue,
+                    ComponentExpressionDescriptor {
+                        component,
+                        span: target.span,
+                        context,
+                    },
+                )?;
                 HirExpression {
-                    ty: queue.hir[child.data].name,
+                    ty: Owned::new(self.file(), queue.hir[child.data].name),
                     kind: HirExpressionKind::Component(child),
                 }
             }
@@ -340,16 +381,31 @@ impl ExpressionBuilder {
                     span: target.span,
                     expected,
                     context,
+                    requester: self.file(),
                 },
             )?,
-            ASTExpression::Array(expressions) => {
-                self.build_array(queue, expressions, target.span, expected, context)?
-            }
-            ASTExpression::Vector(expressions) => {
-                self.build_vector(queue, expressions, target.span, expected, context)?
-            }
+            ASTExpression::Array(expressions) => self.build_sequence(
+                queue,
+                SequenceExpressionDescriptor {
+                    expressions,
+                    expected,
+                    context,
+                    kind: collections::SequenceKind::Array,
+                    span: target.span,
+                },
+            )?,
+            ASTExpression::Vector(expressions) => self.build_sequence(
+                queue,
+                SequenceExpressionDescriptor {
+                    expressions,
+                    expected,
+                    context,
+                    kind: collections::SequenceKind::Vector,
+                    span: target.span,
+                },
+            )?,
         };
-        let exprid = queue.hir.insert_expression(expr);
+        let exprid = queue.hir.store.insert_expression(expr);
         Ok(target.span.make_spanned(exprid))
     }
 }

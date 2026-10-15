@@ -1,15 +1,22 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    path::PathBuf,
+};
 
 use common::{
-    FrontendSymbol, SymbolPointer, SymbolsModule,
-    pool::{DedupPoolId, PoolId},
+    FrontendSymbol, PoolStorage, SymbolPointer, SymbolsModule, VisibilityModifier,
+    pool::{DedupPoolId, Pool, PoolId},
 };
 use slynx_parser::{
     ASTExpression, ASTPath, ASTStatement, AliasDeclaration, ComponentDeclaration, EnumDeclaration,
-    ObjectDeclaration, StaticDeclaration, Type, TypeContext,
+    ExtendDeclaration, FileImport, InterfaceDeclaration, NamedASTDeclaration, ObjectDeclaration,
+    Program, Type,
 };
 
 use crate::{FileId, SourceLoader, SourceNode};
+
+type ModuleFinderCallback<T> =
+    dyn Fn(&SourceNode, FileId, SymbolPointer<FrontendSymbol>) -> Option<T>;
 
 pub struct Modules<'a> {
     pub(crate) loader: SourceLoader<'a>,
@@ -17,6 +24,7 @@ pub struct Modules<'a> {
     pub(crate) paths: HashMap<PathBuf, FileId>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ASTBuiltin {
     Void,
     Boolean,
@@ -29,15 +37,18 @@ pub enum ASTBuiltin {
     AnyComponent,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ASTTypeKind {
     Struct(PoolId<ObjectDeclaration>),
     Component(PoolId<ComponentDeclaration>),
     Alias(PoolId<AliasDeclaration>),
     Enum(PoolId<EnumDeclaration>),
+    Interface(PoolId<InterfaceDeclaration>),
     Builtin(ASTBuiltin),
 }
 
 ///Represents something that can be interpreted as a type on the AST
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ASTType {
     pub owner: FileId,
     pub content: ASTTypeKind,
@@ -102,84 +113,139 @@ impl<'a> Modules<'a> {
         }
     }
 
-    pub fn type_name(
-        &self,
-        ty: DedupPoolId<Type>,
-        context: &TypeContext<'_>,
-    ) -> SymbolPointer<FrontendSymbol> {
+    pub fn type_name(&self, ty: DedupPoolId<Type>) -> SymbolPointer<FrontendSymbol> {
         slynx_parser::type_name(
             self.loader.types,
             self.loader.symbols,
             self.loader.expressions,
             ty,
-            context.generic_names,
         )
     }
 
-    pub fn find_in_modules<T>(
+    ///Finds all the contents using the given `finder` by looking through all the modules imported from `module` and the `module` itself.
+    ///For example to find all the interfaces that are implemented to a given type `Foo`(every occurrence of extend Foo: Interface {}).
+    pub fn find_all_in_modules<T>(
+        &self,
+        module: FileId,
+        finder: &dyn Fn(&SourceNode) -> Option<T>,
+    ) -> Vec<(FileId, T)> {
+        let mut results = Vec::new();
+        let mut queue = VecDeque::new();
+        let mut visited = HashSet::new();
+        queue.push_back(module);
+        while let Some(module_id) = queue.pop_front() {
+            if !visited.insert(module_id) {
+                continue;
+            }
+            let module = self.get_entry(module_id);
+            if let Some(result) = finder(module) {
+                results.push((module.id, result));
+            }
+            for imported_modules in &module.import_submodules {
+                queue.extend(imported_modules.iter().copied());
+            }
+        }
+        results
+    }
+
+    ///Finds a content with the given `name` inside the given `entry` module. If not directly on the module that requested it, checks if it was provided by the other modules it imports from.
+    ///This method is internal, since the `finder` might simply ignore the whether its public or not.
+    ///The `requester`parameter is the original file that made this request and the `entry` is the current file we are looking at.
+    ///The finder receives 3 parameters, the Source we are at, the initial requester, and the name its searching for
+    fn find_in_modules<T>(
         &self,
         name: SymbolPointer<FrontendSymbol>,
-        module: FileId,
-        finder: &dyn Fn(&SourceNode, SymbolPointer<FrontendSymbol>) -> Option<T>,
+        requester: FileId,
+        entry: FileId,
+        finder: &ModuleFinderCallback<T>,
     ) -> Option<(FileId, T)> {
-        let module = &self.modules[module.as_raw() as usize];
-        if let Some(v) = finder(module, name) {
+        let module = &self.modules[entry.as_raw() as usize];
+        if let Some(v) = finder(module, requester, name) {
             return Some((module.id, v));
         }
-        for import in module.imports().iter() {
+        let imports: &Pool<FileImport> = module.get_pool();
+        for import in imports.iter() {
+            let original = self.recreate_pathbuf(module.id, &import.path);
+            let file = self
+                .paths
+                .get(&original)
+                .expect("Expected original path to properly map to some file");
+            if import.usages.is_empty() {
+                let out = finder(&self.modules[file.as_raw() as usize], requester, name);
+                if let Some(out) = out {
+                    return Some((*file, out));
+                }
+            }
             for usage in &import.usages {
-                let target = if let Some(name) = usage.alias {
-                    name
+                let visible = if let Some(alias) = usage.alias {
+                    alias
                 } else {
                     usage.content_name
                 };
-                let original = self.recreate_pathbuf(module.id, &import.path);
-                let file = self
-                    .paths
-                    .get(&original)
-                    .expect("Expected original path to properly map to some file");
-                if let Some(func) = self.find_in_modules(target, *file, finder) {
+
+                if visible != name {
+                    continue;
+                }
+
+                // Look the symbol up under its real name inside the imported
+                // module so aliased imports (`using {X as Y}`) still resolve.
+                if let Some(func) =
+                    self.find_in_modules(usage.content_name, requester, *file, finder)
+                {
                     return Some(func);
                 };
             }
         }
         None
     }
-
-    ///Finds a function with the given name available in the given module. Returns the file that owns the function and the index of the function in the module.
-    pub fn find_function_declaration(
+    ///Finds all the extensions for the given `target` type starting by the given `module` and recursing to every imported module.
+    pub fn find_extend_declaration(
         &self,
-        name: SymbolPointer<FrontendSymbol>,
+        target: DedupPoolId<Type>,
         module: FileId,
-    ) -> Option<(FileId, usize)> {
-        self.find_in_modules(name, module, &|module, name| {
-            module.func().iter().position(|func| func.name == name)
+    ) -> Vec<(FileId, usize)> {
+        self.find_all_in_modules(module, &|module| {
+            (module.get_pool() as &Pool<ExtendDeclaration>)
+                .iter()
+                .position(|extension| extension.target.data == target)
         })
     }
 
-    ///Finds a static variable with the given name available in the given module. Returns the file that owns the static variable and a reference to it.
-    pub fn find_static_declaration(
+    ///Finds a declaration with the given type `T` with the given `name`. This is very similar to `find_in_modules` but instead of finding via a callback, it finds a declaration wih the given `T` type
+    ///even though the logic to find the contents is the same
+    pub fn find_declaration<T>(
         &self,
         name: SymbolPointer<FrontendSymbol>,
-        module: FileId,
-    ) -> Option<(FileId, &StaticDeclaration)> {
-        let module = &self.modules[module.as_raw() as usize];
-        if let Some(statik) = module.statics().iter().find(|statik| statik.name == name) {
-            return Some((module.id, statik));
+        requester: FileId,
+        current_entry: FileId,
+    ) -> Option<(FileId, PoolId<T>)>
+    where
+        Program: PoolStorage<T> + PoolStorage<FileImport>,
+        T: NamedASTDeclaration,
+    {
+        let module = &self.modules[current_entry.as_raw() as usize];
+        if let Some(content) = (module.get_pool() as &Pool<T>).iter().position(|content| {
+            content.name() == name
+                && (content.visibility() == VisibilityModifier::Public
+                    || requester == current_entry)
+        }) {
+            return Some((module.id, PoolId::new(content as u32)));
         }
-        for import in module.imports().iter() {
+
+        for import in (module.get_pool() as &Pool<FileImport>).iter() {
+            let original = self.recreate_pathbuf(module.id, &import.path);
+            let file = self
+                .paths
+                .get(&original)
+                .expect("Expected original path to properly map to some file");
+            if import.usages.is_empty()
+                && let Some(out) = self.find_declaration(name, requester, *file)
+            {
+                return Some(out);
+            }
             for usage in &import.usages {
-                let target = if let Some(name) = usage.alias {
-                    name
-                } else {
-                    usage.content_name
-                };
-                let original = self.recreate_pathbuf(module.id, &import.path);
-                let file = self
-                    .paths
-                    .get(&original)
-                    .expect("Expected original path to properly map to some file");
-                if let Some(statik) = self.find_static_declaration(target, *file) {
+                let target = usage.alias.unwrap_or(usage.content_name);
+                if let Some(statik) = self.find_declaration(target, requester, *file) {
                     return Some(statik);
                 }
             }
@@ -199,38 +265,61 @@ impl<'a> Modules<'a> {
                 content: ASTTypeKind::Builtin(kind),
             });
         };
-        self.find_in_modules(name, module, &|module, name| {
-            if let Some((id, _)) = module
-                .object()
+        self.find_in_modules(name, module, module, &|module, requester, name| {
+            if let Some((id, _)) = (module.get_pool() as &Pool<ObjectDeclaration>)
                 .iter()
                 .with_ids()
-                .find(|(_, strukt)| strukt.name == name)
+                .find(|(_, strukt)| {
+                    strukt.name == name
+                        && (strukt.visibility == VisibilityModifier::Public
+                            || requester == module.id)
+                })
             {
                 return Some(ASTTypeKind::Struct(id));
             }
-            if let Some((id, _)) = module
-                .component()
+            if let Some((id, _)) = (module.get_pool() as &Pool<ComponentDeclaration>)
                 .iter()
                 .with_ids()
-                .find(|(_, component)| component.name == name)
+                .find(|(_, component)| {
+                    component.name == name
+                        && (component.visibility == VisibilityModifier::Public
+                            || requester == module.id)
+                })
             {
                 return Some(ASTTypeKind::Component(id));
             }
-            if let Some((id, _)) = module
-                .alias()
+            if let Some((id, _)) = (module.get_pool() as &Pool<AliasDeclaration>)
                 .iter()
                 .with_ids()
-                .find(|(_, alias)| alias.name == name)
+                .find(|(_, alias)| {
+                    alias.name == name
+                        && (alias.visibility == VisibilityModifier::Public
+                            || requester == module.id)
+                })
             {
                 return Some(ASTTypeKind::Alias(id));
             }
-            if let Some((id, _)) = module
-                .enums()
+            if let Some((id, _)) = (module.get_pool() as &Pool<EnumDeclaration>)
                 .iter()
                 .with_ids()
-                .find(|(_, enumer)| enumer.name == name)
+                .find(|(_, enumer)| {
+                    enumer.name == name
+                        && (enumer.visibility == VisibilityModifier::Public
+                            || requester == module.id)
+                })
             {
                 return Some(ASTTypeKind::Enum(id));
+            }
+            if let Some((id, _)) = (module.get_pool() as &Pool<InterfaceDeclaration>)
+                .iter()
+                .with_ids()
+                .find(|(_, interface)| {
+                    interface.name == name
+                        && (interface.visibility == VisibilityModifier::Public
+                            || requester == module.id)
+                })
+            {
+                return Some(ASTTypeKind::Interface(id));
             }
             None
         })
@@ -246,8 +335,9 @@ impl<'a> Modules<'a> {
         name: SymbolPointer<FrontendSymbol>,
         module: FileId,
     ) -> Option<(FileId, PoolId<EnumDeclaration>, usize)> {
-        self.find_in_modules(name, module, &|module, name| {
-            module.enums().iter().with_ids().find_map(|(id, enumer)| {
+        self.find_in_modules(name, module, module, &|module, _, name| {
+            let enums: &Pool<EnumDeclaration> = module.get_pool();
+            enums.iter().with_ids().find_map(|(id, enumer)| {
                 enumer
                     .variants
                     .iter()
@@ -256,6 +346,17 @@ impl<'a> Modules<'a> {
             })
         })
         .map(|(owner, (id, index))| (owner, id, index))
+    }
+    pub fn generic_count(&self, ast_type: ASTType) -> usize {
+        let entry = self.get_entry(ast_type.owner);
+        match ast_type.content {
+            ASTTypeKind::Struct(id) => entry.object().get(id).generics.type_params.len(),
+            ASTTypeKind::Component(id) => entry.component().get(id).generics.type_params.len(),
+            ASTTypeKind::Alias(id) => entry.alias().get(id).generics.type_params().len(),
+            ASTTypeKind::Enum(id) => entry.enums().get(id).generics.type_params.len(),
+            ASTTypeKind::Interface(id) => entry.interfaces().get(id).generics.type_params.len(),
+            ASTTypeKind::Builtin(_) => 0,
+        }
     }
 
     fn recreate_pathbuf(&self, entry: FileId, path: &ASTPath) -> PathBuf {

@@ -2,8 +2,10 @@ use common::{Span, Spanned, pool::DedupPoolId};
 use slynx_parser::{ASTExpression, Type, TypeContext};
 
 use crate::{
-    HIRError, HirExpression, HirExpressionKind, HirType, Result, SymbolPointer,
-    builders::HirQueueBuilder, generics::GenericTypeArguments,
+    HIRError, HirExpression, HirExpressionKind, Owned, Result, SymbolPointer,
+    builders::{HirQueueBuilder, lowering::lowerer::LowerTypeDeclarationDescriptor},
+    generics::GenericTypeArguments,
+    term::{Term, TermId},
 };
 
 use super::{ExpressionBuilder, ExpressionDescriptor};
@@ -15,7 +17,7 @@ pub struct EnumVariantDescriptor<'a> {
 
 pub struct EnumExpressionDescriptor<'a> {
     ///A reference to the enum's HIR type id.
-    pub enum_type: DedupPoolId<HirType>,
+    pub enum_type: TermId,
     pub variant: EnumVariantDescriptor<'a>,
     ///The generic type parameters passed when creating this enum expression. Such as 'Option.Some<int>(65);' explicitly provides [int]
     pub generics: &'a [Spanned<DedupPoolId<Type>>],
@@ -32,14 +34,29 @@ impl ExpressionBuilder {
         &self,
         queue: &HirQueueBuilder,
         name: SymbolPointer,
-    ) -> Option<(DedupPoolId<HirType>, usize)> {
-        let (owner, enum_id, variant_index) = queue.modules.find_enum_variant(name, self.file())?;
-        let node = queue.get_node(owner);
+    ) -> Option<(TermId, usize)> {
+        let (
+            Owned {
+                owner,
+                term: enum_id,
+            },
+            variant_index,
+        ) = queue.lowerer.lookup.find_enum_variant(name, self.file())?;
         let enum_decl = queue.modules.get_entry(owner).enums().get(enum_id);
-        let context = TypeContext::new(&enum_decl.type_params);
-        let (_, enum_ty) = node
-            .find_type_named_as(enum_decl.span.make_spanned(enum_decl.name), &context)
-            .ok()?;
+        let context = TypeContext::new(&enum_decl.generics.type_params);
+        let ast_type = queue.lowerer.lookup.find_type(owner, enum_decl.name)?;
+        let enum_ty = queue
+            .lowerer
+            .materialize_type_declaration(
+                queue,
+                LowerTypeDeclarationDescriptor {
+                    ast_type,
+                    context: &context,
+                    span: enum_decl.span,
+                },
+            )
+            .ok()?
+            .term;
         Some((enum_ty, variant_index))
     }
 
@@ -66,9 +83,16 @@ impl ExpressionBuilder {
         //Resolve any explicitly-provided generic arguments, e.g. the `[int, void]`
         //of `Result.Ok<int, void>(5)`, into their HIR type ids. These are the
         //concrete type arguments the enum reference should carry.
-        let explicit = queue
-            .get_node(self.file())
-            .resolve_call_generics(descriptor.generics, descriptor.context)?;
+        let explicit = descriptor
+            .generics
+            .iter()
+            .map(|ty| {
+                queue
+                    .lowerer
+                    .lower_type(queue, self.file(), *ty, descriptor.context)
+                    .map(|owned| owned.term)
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         //The number of generic parameters this enum declares, derived from the
         //highest generic-parameter index referenced by the variant's payload.
@@ -82,9 +106,10 @@ impl ExpressionBuilder {
 
         let mut arguments = Vec::new();
         for (arg_index, arg_type) in variant.payload.iter().enumerate() {
-            let (expected_type, generic_index) = match queue.hir.view(*arg_type).raw() {
-                HirType::GenericParam { index, .. } => {
-                    let index = *index as usize;
+            let (expected_type, generic_index) = match queue.hir.view(*arg_type).raw().is_var_type()
+            {
+                Some(term) => {
+                    let index = term.index as usize;
                     let expected = explicit.get(index).copied().or_else(|| generics.get(index));
                     (expected, Some(index))
                 }
@@ -103,7 +128,7 @@ impl ExpressionBuilder {
             if let Some(index) = generic_index
                 && explicit.get(index).is_none()
             {
-                generics.set(index, queue.hir.view(expr.data).ty());
+                generics.set(index, queue.hir.view(expr.data).ty().term);
             }
         }
 
@@ -114,7 +139,7 @@ impl ExpressionBuilder {
 
         let enum_ty = generics.finish_ref(queue.hir, descriptor.enum_type);
         Ok(HirExpression {
-            ty: enum_ty,
+            ty: Owned::new(self.file(), enum_ty),
             kind: HirExpressionKind::Enum {
                 ty: enum_ty,
                 variant: descriptor.variant.variant_id,
@@ -161,8 +186,8 @@ impl ExpressionBuilder {
             .iter()
             .zip(&variant.payload)
             .map(|(arg, ty)| {
-                let expected = match queue.hir.view(*ty).raw() {
-                    HirType::GenericParam { index, .. } => generics.get(*index as usize),
+                let expected = match queue.hir.view(*ty).raw().is_var_type() {
+                    Some(term) => generics.get(term.index as usize),
                     _ => Some(*ty),
                 };
                 let expr = self.build_expression(
@@ -173,17 +198,17 @@ impl ExpressionBuilder {
                         context,
                     },
                 )?;
-                if let HirType::GenericParam { index, .. } = queue.hir.view(*ty).raw() {
-                    generics.set(*index as usize, queue.hir.view(expr.data).ty());
+                if let Some(v) = queue.hir.view(*ty).raw().is_var_type() {
+                    generics.set(v.index as usize, queue.hir.view(expr.data).ty().term);
                 }
                 Ok(expr)
             })
             .collect::<Result<Vec<_>>>()?;
-        let enum_ty = generics.finish_ref(queue.hir, enum_ty);
+        let resolved_enum_ty = generics.finish_ref(queue.hir, enum_ty);
         Ok(HirExpression {
-            ty: enum_ty,
+            ty: Owned::new(self.file(), resolved_enum_ty),
             kind: HirExpressionKind::Enum {
-                ty: enum_ty,
+                ty: resolved_enum_ty,
                 variant: variant_index,
                 args,
             },
@@ -214,7 +239,7 @@ impl ExpressionBuilder {
 
         let expr_view = queue.hir.view(value.data);
         let ty_viewer = expr_view.ty_viewer();
-        let enum_type = ty_viewer.dereference();
+        let enum_type = ty_viewer.nominal();
         let enum_view = enum_type
             .is_enum()
             .ok_or_else(|| HIRError::matches_on_non_enum(enum_type.data, span))?;
@@ -256,7 +281,10 @@ impl ExpressionBuilder {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let ty = queue.hir.create_type(HirType::Bool);
+        let ty = Owned::new(
+            self.file(),
+            queue.hir.types.create_type(Term::boolean_type()),
+        );
         Ok(HirExpression {
             ty,
             kind: HirExpressionKind::Matches {

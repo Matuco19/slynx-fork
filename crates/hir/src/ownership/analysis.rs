@@ -50,7 +50,7 @@ impl OwnershipAnalysis {
     /// Run ownership analysis on the entire HIR.
     pub fn analyze(hir: &SlynxHir) -> Self {
         let mut analysis = Self::new();
-        for file in hir.files.iter() {
+        for file in hir.store.files.iter() {
             for (id, func) in file.declarations.functions.iter().with_ids() {
                 let func_id = DeclarationId::new(file.file, id);
                 analysis.analyze_function(hir, func_id, func);
@@ -125,10 +125,10 @@ impl OwnershipAnalysis {
         match &expr_data.kind {
             HirExpressionKind::Identifier(id) => {
                 if state.is_variable_moved(*id) {
-                    self.errors.push(OwnershipError {
-                        kind: OwnershipErrorKind::UseAfterMove { variable: *id },
-                        span: expr.span,
-                    });
+                    self.errors.push(OwnershipError::new(
+                        OwnershipErrorKind::UseAfterMove { variable: *id },
+                        expr.span,
+                    ));
                 }
             }
             HirExpressionKind::FieldAccess { expr: parent, .. } => {
@@ -160,13 +160,13 @@ impl OwnershipAnalysis {
                 self.analyze_reference(hir, inner, mutable, expr.span, state);
             }
             HirExpressionKind::FunctionCall { args, name, .. } => {
-                let ty = hir.get_file(name.file_id)[name.local_id].ty;
+                let ty = hir.get_file(name.owner)[name.term].ty;
                 let viewer = hir.view(ty);
-                let ty_viewer = viewer
+                let (arguments, _) = viewer
                     .is_function()
                     .expect("View of the type of a function should be a function type");
 
-                for (arg, param) in args.iter().zip(ty_viewer.arguments()) {
+                for (arg, param) in args.iter().zip(arguments) {
                     if hir.view(*param).is_ref() {
                         self.analyze_expression_read(hir, arg, state);
                     } else {
@@ -209,10 +209,10 @@ impl OwnershipAnalysis {
             HirExpressionKind::Identifier(id) => {
                 // Read-only: check for use-after-move, but do NOT mark as moved
                 if state.is_variable_moved(*id) {
-                    self.errors.push(OwnershipError {
-                        kind: OwnershipErrorKind::UseAfterMove { variable: *id },
-                        span: expr.span,
-                    });
+                    self.errors.push(OwnershipError::new(
+                        OwnershipErrorKind::UseAfterMove { variable: *id },
+                        expr.span,
+                    ));
                 }
                 self.expression_uses.insert(expr.data, ExpressionUse::Read);
             }
@@ -288,10 +288,10 @@ impl OwnershipAnalysis {
         state: &mut FunctionOwnershipState,
     ) -> ExpressionUse {
         if state.is_variable_moved(id) {
-            self.errors.push(OwnershipError {
-                kind: OwnershipErrorKind::UseAfterMove { variable: id },
+            self.errors.push(OwnershipError::new(
+                OwnershipErrorKind::UseAfterMove { variable: id },
                 span,
-            });
+            ));
         } else {
             state.mark_variable_moved(id);
         }
@@ -314,15 +314,15 @@ impl OwnershipAnalysis {
         };
 
         if let Some(place_id) = self.build_place_from_expr(hir, inner.data)
-            && let HirPlace::Variable(id) = &hir.places[place_id]
+            && let HirPlace::Variable(id) = &hir.store.places[place_id]
         {
             match () {
                 _ if state.can_borrow_variable(*id, kind) => state.borrow_variable(*id, kind),
                 _ if state.is_variable_moved(*id) => {
-                    self.errors.push(OwnershipError {
-                        kind: OwnershipErrorKind::UseAfterMove { variable: *id },
+                    self.errors.push(OwnershipError::new(
+                        OwnershipErrorKind::UseAfterMove { variable: *id },
                         span,
-                    });
+                    ));
                     return;
                 }
                 _ => {
@@ -336,14 +336,14 @@ impl OwnershipAnalysis {
                     } else {
                         BorrowKind::Immutable
                     };
-                    self.errors.push(OwnershipError {
-                        kind: OwnershipErrorKind::ConflictingBorrow {
+                    self.errors.push(OwnershipError::new(
+                        OwnershipErrorKind::ConflictingBorrow {
                             variable: *id,
                             existing_borrow: existing_kind,
                             new_borrow: kind,
                         },
                         span,
-                    });
+                    ));
                     return;
                 }
             }

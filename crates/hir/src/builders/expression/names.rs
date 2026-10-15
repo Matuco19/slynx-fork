@@ -3,7 +3,7 @@ use module_loader::FileId;
 
 use crate::{
     DeclarationId, HIRError, HirExpression, HirExpressionKind, HirFunctionDeclaration,
-    HirStaticDeclaration, Result, SymbolPointer, VariableId, builders::HirQueueBuilder,
+    HirStaticDeclaration, Owned, Result, SymbolPointer, VariableId, builders::HirQueueBuilder,
     context::HirSymbol,
 };
 
@@ -24,13 +24,16 @@ impl ExpressionBuilder {
         ptr: SymbolPointer,
         span: Span,
     ) -> Result<HirName> {
-        if let Some(var) = self.variables.scope.get_name(&ptr) {
-            Ok(HirName::Variable(var))
-        } else if let Some((file_owner, statik)) = queue.find_static_declaration(ptr, self.file()) {
-            let id = queue.enqueue_static(statik, queue.get_node(file_owner))?;
-            Ok(HirName::Static(id))
-        } else {
-            Err(HIRError::name_unrecognized(ptr, span))
+        match () {
+            _ if let Some(var) = self.variables.scope.get_name(&ptr) => Ok(HirName::Variable(var)),
+            _ if let Some(Owned { owner, term }) =
+                queue.lowerer.lookup.find_static(ptr, self.file()) =>
+            {
+                let statik = queue.modules.get_entry(owner).statics().get(term);
+                let id = queue.enqueue_static(statik, owner)?;
+                Ok(HirName::Static(id))
+            }
+            _ => Err(HIRError::name_unrecognized(ptr, span)),
         }
     }
 
@@ -66,6 +69,20 @@ impl ExpressionBuilder {
         name: SymbolPointer,
         expression_span: Span,
     ) -> Result<HirExpression> {
+        if name == queue.hir.intern_name("Self")
+            && let Some(self_ty) = self.self_type
+            && let Some(struct_view) = queue.hir.view(self_ty).nominal().is_struct()
+            && struct_view.fields().is_empty()
+        {
+            return Ok(HirExpression {
+                ty: Owned::new(self.file(), self_ty),
+                kind: HirExpressionKind::Object {
+                    name: self_ty,
+                    fields: Vec::new(),
+                },
+            });
+        }
+
         match self.resolve_name(queue, name, expression_span)? {
             HirName::Variable(v) => {
                 let ty = self
@@ -74,7 +91,7 @@ impl ExpressionBuilder {
                     .map(|var| var.type_id)
                     .expect("Expected variable to have a type defined on this builder");
                 Ok(HirExpression {
-                    ty,
+                    ty: Owned::new(self.file(), ty),
                     kind: HirExpressionKind::Identifier(v),
                 })
             }

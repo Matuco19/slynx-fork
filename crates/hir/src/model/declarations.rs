@@ -30,8 +30,10 @@ use common::{
 use smallvec::SmallVec;
 
 use crate::{
-    DeclarationId, HirType, SymbolPointer, VariableId,
-    model::{HirComponentExpression, HirExpression, HirStatement, HirStyleStatement},
+    DeclarationId, HirDeclaration, LanguageItem, Owned, SymbolPointer, TypeDeclaration, VariableId,
+    interface::InterfaceTerm,
+    model::{HirComponentExpression, HirExpression, HirStatement},
+    term::TermId,
 };
 
 /// A processed attribute on an HIR declaration.
@@ -56,20 +58,48 @@ pub enum HirAttributeKind {
 }
 
 #[derive(Debug)]
-///A style usage. This contains an ID to another stylesheet, and the parameters used to generate before the actual style.
-pub struct HirStyleUsage {
-    /// The id of the style to use
-    pub style: DeclarationId<HirStylesheetDeclaration>,
-    ///The parameters to it
-    pub params: Vec<Spanned<PoolId<HirExpression>>>,
+pub struct HirExtendDeclaration {
+    ///The type being extended.
+    pub target: TermId,
+    pub generics: Vec<GenericParameter>,
+    ///The interface being implemented.
+    pub interfaces: Vec<TermId>,
+    ///Methods provided by this implementation, paired with their source names.
+    pub methods: Vec<(SymbolPointer, DeclarationId<HirFunctionDeclaration>)>,
+    pub attributes: Vec<HirAttribute>,
 }
+
+///A generic parameter defined for something. The given `name` is the name of the parameter and bounds are the interfaces that the parameter must implement.
+#[derive(Debug, Clone)]
+pub struct GenericParameter {
+    pub name: SymbolPointer,
+    pub bounds: Vec<InterfaceTerm>,
+}
+
 #[derive(Debug)]
 pub struct HirFunctionDeclaration {
     pub name: SymbolPointer,
-    pub generics: Vec<SymbolPointer>,
+    ///The type this declaration is an inherent method of, or `None` when it is
+    ///not a method of a single type.
+    ///
+    ///The HIR does not mangle. Two types declared in the same file may each
+    ///declare a method called `run`, so a method is identified by the pair
+    ///`(self_type, name)` and never by name alone; the pair is resolved
+    ///through the type-keyed [`MethodTable`](crate::context::types::MethodTable),
+    ///which is the only table methods are registered in. Free functions keep
+    ///their `SymbolRegistry` entry, where a symbol maps to exactly one
+    ///declaration.
+    ///
+    ///`Some` means the name is *not* unique on its own and must be widened with
+    ///the owner's name before it reaches the IR — codegen reads this to mangle.
+    ///`None` means the name is already final: free functions, and the interface
+    ///signature declarations and forwarding thunks, which are synthesized with
+    ///an already-unique name.
+    pub self_type: Option<TermId>,
+    pub generics: Vec<GenericParameter>,
     pub args: SmallVec<[VariableId; 2]>,
     pub statements: Vec<Spanned<PoolId<HirStatement>>>,
-    pub ty: DedupPoolId<HirType>,
+    pub ty: TermId,
     pub visibility: VisibilityModifier,
     pub external: bool,
     pub attributes: Vec<HirAttribute>,
@@ -79,8 +109,9 @@ pub struct HirFunctionDeclaration {
 #[derive(Debug)]
 pub struct HirObjectDeclaration {
     pub name: SymbolPointer,
-    pub generics: Vec<SymbolPointer>,
-    pub ty: DedupPoolId<HirType>,
+    pub span: Span,
+    pub generics: Vec<GenericParameter>,
+    pub ty: TermId,
     pub visibility: VisibilityModifier,
     pub external: bool,
     pub attributes: Vec<HirAttribute>,
@@ -89,7 +120,8 @@ pub struct HirObjectDeclaration {
 #[derive(Debug)]
 pub struct HirStaticDeclaration {
     pub name: SymbolPointer,
-    pub ty: DedupPoolId<HirType>,
+    pub span: Span,
+    pub ty: Owned<TermId>,
     pub visibility: VisibilityModifier,
     pub external: bool,
     pub attributes: Vec<HirAttribute>,
@@ -98,31 +130,20 @@ pub struct HirStaticDeclaration {
 #[derive(Debug)]
 pub struct HirAliasDeclaration {
     pub name: SymbolPointer,
-    pub generics: Vec<SymbolPointer>,
-    pub ty: DedupPoolId<HirType>,
+    pub attributes: Vec<HirAttribute>,
+    pub generics: Vec<GenericParameter>,
+    pub ty: TermId,
     pub visibility: VisibilityModifier,
 }
 
 #[derive(Debug)]
 pub struct HirComponentDeclaration {
     pub name: SymbolPointer,
-    pub generics: Vec<SymbolPointer>,
+    pub span: Span,
+    pub generics: Vec<GenericParameter>,
     pub props: Vec<ComponentMemberDeclaration>,
-    pub ty: DedupPoolId<HirType>,
+    pub ty: TermId,
     pub visibility: VisibilityModifier,
-    pub attributes: Vec<HirAttribute>,
-}
-
-#[derive(Debug)]
-pub struct HirStylesheetDeclaration {
-    pub name: SymbolPointer,
-    pub usages: Vec<HirStyleUsage>,
-    pub generics: Vec<SymbolPointer>,
-    pub args: SmallVec<[VariableId; 2]>,
-    pub statements: Vec<HirStyleStatement>,
-    pub ty: DedupPoolId<HirType>,
-    pub visibility: VisibilityModifier,
-    pub external: bool,
     pub attributes: Vec<HirAttribute>,
 }
 
@@ -130,7 +151,7 @@ pub struct HirStylesheetDeclaration {
 pub enum HirEnumVariantKind {
     Raw,
     Valued(Spanned<DedupPoolId<HirExpression>>),
-    Associated(SmallVec<[DedupPoolId<HirType>; 2]>), //Struct is associated but the names get turned into numeric fields, so it becomes ordered, an enum with variant A {thing: int, b: float} is the same as A(int,float)
+    Associated(SmallVec<[TermId; 2]>), //Struct is associated but the names get turned into numeric fields, so it becomes ordered, an enum with variant A {thing: int, b: float} is the same as A(int,float)
 }
 
 #[derive(Debug, Clone)]
@@ -142,11 +163,12 @@ pub struct HirEnumVariant {
 #[derive(Debug)]
 pub struct HirEnumDeclaration {
     pub name: SymbolPointer,
-    pub generics: Vec<SymbolPointer>,
+    pub span: Span,
+    pub generics: Vec<GenericParameter>,
     pub variants: Vec<Spanned<HirEnumVariant>>,
     pub visibility: VisibilityModifier,
     pub attributes: Vec<HirAttribute>,
-    pub ty: DedupPoolId<HirType>,
+    pub ty: TermId,
 }
 
 /// A member of a component declaration.
@@ -178,7 +200,7 @@ pub struct HirEnumDeclaration {
 ///
 /// A specialized component like `Text` or `Div` with predefined behavior.
 #[derive(Debug, Clone)]
-#[repr(C)]
+
 pub enum ComponentMemberDeclaration {
     /// A property declaration with an optional default value.
     ///
@@ -281,3 +303,64 @@ impl ComponentMemberDeclaration {
         Self::Child(child)
     }
 }
+
+macro_rules! impl_hir_decl {
+    ($($t:ty => $name:ident),*$(,)?) => {
+        $(
+            impl HirDeclaration for $t {
+                fn attributes(&self) -> &[HirAttribute] {
+                    &self.attributes
+                }
+                fn attributes_mut(&mut self) -> &mut Vec<HirAttribute> {
+                    &mut self.attributes
+                }
+            }
+            impl LanguageItem for $t {
+                fn map(items: &crate::context::LangItems) -> &crate::context::LangMap<Self> {
+                    &items.$name
+                }
+            }
+        )*
+    };
+}
+
+use crate::id::AnyDeclarationId;
+macro_rules! impl_type_decl {
+    ($($t:ty),*$(,)?) => {
+        $(
+            impl TypeDeclaration for $t {
+                fn hir_type(&self) -> TermId {
+                    self.ty
+                }
+                fn generics(&self) -> &[GenericParameter] {
+                    &self.generics
+                }
+                fn name(&self) -> SymbolPointer {
+                    self.name
+                }
+                fn as_any_id(id: DeclarationId<Self>) -> AnyDeclarationId {
+                    AnyDeclarationId::from(id)
+                }
+            }
+
+        )*
+    };
+}
+
+impl_type_decl!(
+    HirFunctionDeclaration,
+    HirObjectDeclaration,
+    HirComponentDeclaration,
+    HirEnumDeclaration,
+    HirAliasDeclaration,
+);
+
+impl_hir_decl!(
+    HirFunctionDeclaration => functions,
+    HirObjectDeclaration => objects,
+    HirComponentDeclaration => components,
+    HirEnumDeclaration => enums,
+    HirExtendDeclaration => extensions,
+    HirAliasDeclaration => aliases,
+    HirStaticDeclaration => statics,
+);

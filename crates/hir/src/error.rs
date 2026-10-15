@@ -1,9 +1,8 @@
-use crate::{
-    ComponentId, SymbolPointer,
-    model::{HirExpression, HirType},
-};
+use std::backtrace::Backtrace;
 
-use common::{Span, pool::DedupPoolId};
+use crate::{ComponentId, SymbolPointer, model::HirExpression, term::TermId};
+
+use common::Span;
 use module_loader::FileId;
 
 /// A temporary component key used during signature resolution.
@@ -20,6 +19,7 @@ pub struct HIRError {
     pub kind: HIRErrorKind,
     /// The source location associated with this error.
     pub span: Span,
+    pub backtrace: Backtrace,
 }
 
 #[derive(Debug)]
@@ -35,14 +35,49 @@ pub enum NotMutableReason {
     ExpressionNotAssignable,
 }
 
+#[derive(Debug, Clone)]
+pub enum MissingFeature {
+    ComplexTypeForBounds,
+    GenericInterfaces,
+}
+
+#[derive(Debug, Clone)]
+pub enum ExpectedTypeUsage {
+    InterfaceType,
+}
+
 /// All possible error kinds that can occur during HIR generation.
 #[derive(Debug)]
 pub enum HIRErrorKind {
-    ///Error that occurs when a type is used like an enum, but isn't
-    InvalidEnumUsage(DedupPoolId<HirType>),
+    UnexpectedTypeUsage {
+        actual: TermId,
+        expected_usage: ExpectedTypeUsage,
+    },
 
-    MethodNotFound(SymbolPointer),
-    StaticMethodNotFound(SymbolPointer),
+    UnimplementedFeature(MissingFeature),
+    ///Error that occurs when a type is used like an enum, but isn't
+    InvalidEnumUsage(TermId),
+
+    MissingExtensionMethod {
+        method: SymbolPointer,
+    },
+    MethodNotFound(SymbolPointer, TermId),
+    StaticMethodNotFound(SymbolPointer, TermId),
+    /// A concrete type implemented the same interface more than once (coherence).
+    DuplicateInterfaceImplementation {
+        /// The concrete type that was implemented twice.
+        ty: TermId,
+        /// The interface that was implemented more than once.
+        interface: TermId,
+    },
+    /// A deferred interface call could not be discharged: the receiver's
+    /// concrete type has no implementation of the method.
+    UnresolvedInterfaceCall {
+        /// The name of the interface method that could not be dispatched.
+        method: SymbolPointer,
+        /// The concrete receiver type that provides no implementation.
+        receiver: TermId,
+    },
     InvalidTypeAccess,
     ExpressionNotMutable(NotMutableReason),
     InvalidDeref,
@@ -56,7 +91,7 @@ pub enum HIRErrorKind {
     EnumVariantNotAnInt(SymbolPointer),
 
     /// A `matches` expression's left-hand side is not an enum value.
-    MatchesOnNonEnum(DedupPoolId<HirType>),
+    MatchesOnNonEnum(TermId),
 
     /// The right-hand side of a `matches` expression is not a valid pattern
     /// (a bare variant name or a variant call).
@@ -71,11 +106,11 @@ pub enum HIRErrorKind {
     InvalidEnumRepresentation(SymbolPointer),
 
     UnexpectedType {
-        expected: DedupPoolId<HirType>,
-        received: DedupPoolId<HirType>,
+        expected: TermId,
+        received: TermId,
     },
     ///Invalid indexing error occurs when the expression being indexed cannot be indexed. So 5[12] cannot be indexed, which then gives this error
-    InvalidIndexing(DedupPoolId<HirType>),
+    InvalidIndexing(TermId),
     ///Couldnt infer is an error when the type of something could not be inferred
     CouldntInfer,
     NotAComponent(SymbolPointer),
@@ -95,12 +130,12 @@ pub enum HIRErrorKind {
     /// A field access was attempted on a type that does not support it.
     InvalidFieldAccessTarget {
         /// The type that was incorrectly accessed.
-        ty: DedupPoolId<HirType>,
+        ty: TermId,
     },
     /// A tuple index access was attempted on a non-tuple type.
     InvalidTupleAccessTarget {
         /// The type that was incorrectly accessed.
-        ty: DedupPoolId<HirType>,
+        ty: TermId,
     },
     /// A tuple was indexed out of bounds.
     InvalidTupleIndex {
@@ -125,12 +160,17 @@ pub enum HIRErrorKind {
     PropertyNotRecognized {
         /// The names of the unrecognized properties.
         prop_names: Vec<SymbolPointer>,
-        ty: DedupPoolId<HirType>,
+        ty: TermId,
     },
     /// A property was accessed that exists but is not visible from the current context.
     PropertyNotVisible {
         /// The name of the non-visible property.
         prop_name: SymbolPointer,
+    },
+    /// A method was called that exists but is not visible from the calling file.
+    MethodNotVisible {
+        /// The name of the non-visible method.
+        method_name: SymbolPointer,
     },
     /// A component child expression is not valid in this context.
     InvalidChild,
@@ -144,10 +184,10 @@ pub enum HIRErrorKind {
     /// A type definition is recursive without indirection, which is not allowed.
     RecursiveType {
         /// The type symbol that is recursive.
-        ty: DedupPoolId<HirType>,
+        ty: TermId,
     },
     /// A call was made to a value that is not a function.
-    NotAFunction(SymbolPointer, HirType),
+    NotAFunction(SymbolPointer, TermId),
     /// A function was called with the wrong number of arguments.
     InvalidFuncallArgLength {
         /// The name of the function that was called.
@@ -216,273 +256,219 @@ pub enum HIRErrorKind {
         /// The name of the function whose instantiation cycles.
         func: SymbolPointer,
         /// The generic type arguments that keep growing.
-        args: Vec<DedupPoolId<HirType>>,
+        args: Vec<TermId>,
     },
+    /// A construct that is not yet supported was encountered. The named
+    /// declaration cannot be processed by the current implementation.
+    NotImplemented(SymbolPointer),
 }
 
 impl HIRError {
-    pub fn not_an_enum(ty: DedupPoolId<HirType>, span: Span) -> Self {
+    pub fn new(err: impl Into<HIRErrorKind>, span: Span) -> Self {
         Self {
-            kind: HIRErrorKind::InvalidEnumUsage(ty),
+            kind: err.into(),
             span,
+            backtrace: Backtrace::capture(),
         }
     }
 
-    pub fn method_not_found(name: SymbolPointer, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::MethodNotFound(name),
-            span,
-        }
+    pub fn missing_interface_method(name: SymbolPointer, span: Span) -> Self {
+        Self::new(HIRErrorKind::MissingExtensionMethod { method: name }, span)
     }
 
-    pub fn static_method_not_found(name: SymbolPointer, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::StaticMethodNotFound(name),
+    pub fn expected_interface_type(found: TermId, span: Span) -> Self {
+        Self::new(
+            HIRErrorKind::UnexpectedTypeUsage {
+                expected_usage: ExpectedTypeUsage::InterfaceType,
+                actual: found,
+            },
             span,
-        }
+        )
+    }
+
+    pub fn unimplemented(feature: MissingFeature, span: Span) -> Self {
+        Self::new(HIRErrorKind::UnimplementedFeature(feature), span)
+    }
+
+    pub fn not_an_enum(ty: TermId, span: Span) -> Self {
+        Self::new(HIRErrorKind::InvalidEnumUsage(ty), span)
+    }
+
+    pub fn method_not_found(name: SymbolPointer, target: TermId, span: Span) -> Self {
+        Self::new(HIRErrorKind::MethodNotFound(name, target), span)
+    }
+
+    pub fn static_method_not_found(name: SymbolPointer, target: TermId, span: Span) -> Self {
+        Self::new(HIRErrorKind::StaticMethodNotFound(name, target), span)
+    }
+
+    pub fn duplicate_interface_implementation(ty: TermId, interface: TermId, span: Span) -> Self {
+        Self::new(
+            HIRErrorKind::DuplicateInterfaceImplementation { ty, interface },
+            span,
+        )
+    }
+
+    ///A deferred interface call on a receiver that no extension implements.
+    pub fn unresolved_interface_call(method: SymbolPointer, receiver: TermId, span: Span) -> Self {
+        Self::new(
+            HIRErrorKind::UnresolvedInterfaceCall { method, receiver },
+            span,
+        )
     }
 
     pub fn invalid_type_access(span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::InvalidTypeAccess,
-            span,
-        }
+        Self::new(HIRErrorKind::InvalidTypeAccess, span)
     }
 
     pub fn expression_not_mutable(reason: NotMutableReason, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::ExpressionNotMutable(reason),
-            span,
-        }
+        Self::new(HIRErrorKind::ExpressionNotMutable(reason), span)
     }
 
     pub fn invalid_deref(span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::InvalidDeref,
-            span,
-        }
+        Self::new(HIRErrorKind::InvalidDeref, span)
     }
     pub fn array_length_mismatch(expected: usize, actual: usize, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::ArrayLengthMismatch { expected, actual },
-            span,
-        }
+        Self::new(HIRErrorKind::ArrayLengthMismatch { expected, actual }, span)
     }
     pub fn missing_return(span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::MissingReturn,
-            span,
-        }
+        Self::new(HIRErrorKind::MissingReturn, span)
     }
 
     pub fn enum_variant_must_be_an_int(name: SymbolPointer, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::EnumVariantNotAnInt(name),
-            span,
-        }
+        Self::new(HIRErrorKind::EnumVariantNotAnInt(name), span)
     }
 
-    pub fn matches_on_non_enum(ty: DedupPoolId<HirType>, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::MatchesOnNonEnum(ty),
-            span,
-        }
+    pub fn matches_on_non_enum(ty: TermId, span: Span) -> Self {
+        Self::new(HIRErrorKind::MatchesOnNonEnum(ty), span)
     }
 
     pub fn invalid_pattern(span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::InvalidPattern,
-            span,
-        }
+        Self::new(HIRErrorKind::InvalidPattern, span)
     }
 
     pub fn variant_unrecognized(name: SymbolPointer, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::VariantNotRecognized(name),
-            span,
-        }
+        Self::new(HIRErrorKind::VariantNotRecognized(name), span)
     }
 
     pub fn invalid_enum_representation(name: SymbolPointer, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::InvalidEnumRepresentation(name),
-            span,
-        }
+        Self::new(HIRErrorKind::InvalidEnumRepresentation(name), span)
     }
 
-    pub fn invalid_indexing(expr_type: DedupPoolId<HirType>, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::InvalidIndexing(expr_type),
-            span,
-        }
+    pub fn invalid_indexing(expr_type: TermId, span: Span) -> Self {
+        Self::new(HIRErrorKind::InvalidIndexing(expr_type), span)
     }
-    pub fn unexpected_type(
-        received: DedupPoolId<HirType>,
-        expected: DedupPoolId<HirType>,
-        span: Span,
-    ) -> Self {
-        Self {
-            kind: HIRErrorKind::UnexpectedType { received, expected },
-            span,
-        }
+
+    pub fn unexpected_type(received: TermId, expected: TermId, span: Span) -> Self {
+        Self::new(HIRErrorKind::UnexpectedType { received, expected }, span)
     }
     pub fn couldnt_infer(span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::CouldntInfer,
-            span,
-        }
+        Self::new(HIRErrorKind::CouldntInfer, span)
     }
     pub fn component_not_found(name: SymbolPointer, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::ComponentNotFound(name),
-            span,
-        }
+        Self::new(HIRErrorKind::ComponentNotFound(name), span)
     }
 
     pub fn component_missing_prop_type(span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::ComponentPropertyMissingType,
-            span,
-        }
+        Self::new(HIRErrorKind::ComponentPropertyMissingType, span)
     }
 
     pub fn invalid_ref_write(span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::InvalidWrite(InvalidWriteReason::ReferenceImmutable),
+        Self::new(
+            HIRErrorKind::InvalidWrite(InvalidWriteReason::ReferenceImmutable),
             span,
-        }
+        )
     }
 
     pub fn invalid_variable_write(name: SymbolPointer, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::InvalidWrite(InvalidWriteReason::ImmutableVariable(name)),
+        Self::new(
+            HIRErrorKind::InvalidWrite(InvalidWriteReason::ImmutableVariable(name)),
             span,
-        }
+        )
     }
     pub fn invalid_expr_write(span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::InvalidWrite(InvalidWriteReason::ExpressionNotAssignable),
+        Self::new(
+            HIRErrorKind::InvalidWrite(InvalidWriteReason::ExpressionNotAssignable),
             span,
-        }
+        )
     }
     pub fn invalid_field_access(span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::InvalidFieldAccess,
-            span,
-        }
+        Self::new(HIRErrorKind::InvalidFieldAccess, span)
     }
 
-    ///Creates a new `InvalidStyleDefinition` error, where the name of the style definition is the given `name` and the given `span` is
-    ///the span on the code that generated so
+    /// Creates a new [`HIRErrorKind::InvalidTupleIndex`] error for a tuple index out of bounds,
+    /// where the given `span` is the span on the code that generated it.
     pub fn invalid_tuple_index(index: usize, max_index: usize, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::InvalidTupleIndex {
+        Self::new(
+            HIRErrorKind::InvalidTupleIndex {
                 index,
                 length: max_index,
             },
             span,
-        }
+        )
     }
-    ///Creates a new `InvalidStyleDefinition` error, where the name of the style definition is the given `name` and the given `span` is
-    ///the span on the code that generated so
-    pub fn invalid_tuple_target(target: DedupPoolId<HirType>, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::InvalidTupleAccessTarget { ty: target },
-            span,
-        }
+    /// Creates a new [`HIRErrorKind::InvalidTupleAccessTarget`] error for accessing a non-tuple
+    /// type as a tuple, where the given `span` is the span on the code that generated it.
+    pub fn invalid_tuple_target(target: TermId, span: Span) -> Self {
+        Self::new(HIRErrorKind::InvalidTupleAccessTarget { ty: target }, span)
     }
-    ///Creates a new `InvalidStyleDefinition` error, where the name of the style definition is the given `name` and the given `span` is
-    ///the span on the code that generated so
     pub fn invalid_style_definition(name: SymbolPointer, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::InvalidStyleDefinition { name },
-            span,
-        }
+        Self::new(HIRErrorKind::InvalidStyleDefinition { name }, span)
     }
-    ///Creates a new `InvalidStyleEvent` error, where the `name` is the invalid style event
+    /// Creates a new [`HIRErrorKind::InvalidStyleEvent`] error, where the `name` is the invalid style event
     pub fn invalid_style_event(name: SymbolPointer, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::InvalidStyleEvent { name },
-            span,
-        }
+        Self::new(HIRErrorKind::InvalidStyleEvent { name }, span)
     }
 
     /// Creates a [`HIRErrorKind::RecursiveType`] error for the given type symbol.
-    pub fn recursive(ty: DedupPoolId<HirType>, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::RecursiveType { ty },
-            span,
-        }
+    pub fn recursive(ty: TermId, span: Span) -> Self {
+        Self::new(HIRErrorKind::RecursiveType { ty }, span)
     }
     /// Creates a [`HIRErrorKind::TypeNotRecognized`] error for the given type name.
     pub fn type_unrecognized(name: SymbolPointer, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::TypeNotRecognized(name),
-            span,
-        }
+        Self::new(HIRErrorKind::TypeNotRecognized(name), span)
     }
     /// Creates a [`HIRErrorKind::NameNotRecognized`] error for the given identifier.
     pub fn name_unrecognized(name: SymbolPointer, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::NameNotRecognized(name),
-            span,
-        }
+        Self::new(HIRErrorKind::NameNotRecognized(name), span)
     }
     /// Creates a [`HIRErrorKind::PropertyNotVisible`] error for the given property name.
     pub fn not_visible_property(name: SymbolPointer, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::PropertyNotVisible { prop_name: name },
-            span,
-        }
+        Self::new(HIRErrorKind::PropertyNotVisible { prop_name: name }, span)
+    }
+    /// Creates a [`HIRErrorKind::MethodNotVisible`] error for the given method name.
+    pub fn not_visible_method(name: SymbolPointer, span: Span) -> Self {
+        Self::new(HIRErrorKind::MethodNotVisible { method_name: name }, span)
     }
     /// Creates a [`HIRErrorKind::InvalidFieldAccessTarget`] for accessing a non-struct type as a struct.
-    pub fn not_a_struct(ty: DedupPoolId<HirType>, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::InvalidFieldAccessTarget { ty },
-            span,
-        }
+    pub fn not_a_struct(ty: TermId, span: Span) -> Self {
+        Self::new(HIRErrorKind::InvalidFieldAccessTarget { ty }, span)
     }
     /// Creates a [`HIRErrorKind::InvalidFieldAccessTarget`] for accessing a non-struct type as a struct.
     pub fn not_a_component(name: SymbolPointer, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::NotAComponent(name),
-            span,
-        }
+        Self::new(HIRErrorKind::NotAComponent(name), span)
     }
     /// Creates a [`HIRErrorKind::InvalidTupleAccessTarget`] for accessing a non-tuple type as a tuple.
-    pub fn not_a_tuple(ty: DedupPoolId<HirType>, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::InvalidTupleAccessTarget { ty },
-            span,
-        }
+    pub fn not_a_tuple(ty: TermId, span: Span) -> Self {
+        Self::new(HIRErrorKind::InvalidTupleAccessTarget { ty }, span)
     }
     /// Creates a [`HIRErrorKind::InvalidType`] error for the given type symbol and reason.
     pub fn invalid_type(name: SymbolPointer, reason: InvalidTypeReason, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::InvalidType { ty: name, reason },
-            span,
-        }
+        Self::new(HIRErrorKind::InvalidType { ty: name, reason }, span)
     }
     /// Creates a [`HIRErrorKind::MissingProperty`] error listing the missing property names.
     pub fn missing_properties(names: Vec<SymbolPointer>, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::MissingProperty { prop_names: names },
-            span,
-        }
+        Self::new(HIRErrorKind::MissingProperty { prop_names: names }, span)
     }
     /// Creates a [`HIRErrorKind::PropertyNotRecognized`] error listing the unrecognized property names.
-    pub fn property_unrecognized(
-        ty: DedupPoolId<HirType>,
-        names: Vec<SymbolPointer>,
-        span: Span,
-    ) -> Self {
-        Self {
-            kind: HIRErrorKind::PropertyNotRecognized {
+    pub fn property_unrecognized(ty: TermId, names: Vec<SymbolPointer>, span: Span) -> Self {
+        Self::new(
+            HIRErrorKind::PropertyNotRecognized {
                 prop_names: names,
                 ty,
             },
             span,
-        }
+        )
     }
     /// Creates a [`HIRErrorKind::InvalidFuncallArgLength`] error for a call with the wrong number of arguments.
     pub fn invalid_funcall_arg_length(
@@ -491,35 +477,26 @@ impl HIRError {
         received: usize,
         span: Span,
     ) -> Self {
-        Self {
-            kind: HIRErrorKind::InvalidFuncallArgLength {
+        Self::new(
+            HIRErrorKind::InvalidFuncallArgLength {
                 func_name: func,
                 expected_length: expected,
                 received_length: received,
             },
             span,
-        }
+        )
     }
     /// Creates a [`HIRErrorKind::NotAFunction`] error for a call to a non-function value.
-    pub fn not_a_func(func: SymbolPointer, ty: HirType, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::NotAFunction(func, ty),
-            span,
-        }
+    pub fn not_a_func(func: SymbolPointer, ty: TermId, span: Span) -> Self {
+        Self::new(HIRErrorKind::NotAFunction(func, ty), span)
     }
     /// Creates a [`HIRErrorKind::NameAlreadyDefined`] error for a duplicate declaration.
     pub fn already_defined(name: SymbolPointer, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::NameAlreadyDefined(name),
-            span,
-        }
+        Self::new(HIRErrorKind::NameAlreadyDefined(name), span)
     }
     /// Creates a [`HIRErrorKind::IntrinsicNotRegistered`] error for the given intrinsic name.
     pub fn intrinsic_not_registered(name: SymbolPointer, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::IntrinsicNotRegistered { name },
-            span,
-        }
+        Self::new(HIRErrorKind::IntrinsicNotRegistered { name }, span)
     }
     /// Creates a [`HIRErrorKind::CyclicComponentSignature`] error.
     pub fn cyclic_component_signature(
@@ -527,18 +504,15 @@ impl HIRError {
         chain: Vec<ComponentKey>,
         span: Span,
     ) -> Self {
-        Self {
-            kind: HIRErrorKind::CyclicComponentSignature { component, chain },
+        Self::new(
+            HIRErrorKind::CyclicComponentSignature { component, chain },
             span,
-        }
+        )
     }
 
     /// Creates a [`HIRErrorKind::CyclicComponentBody`] error.
     pub fn cyclic_component_body(component: ComponentId, span: Span) -> Self {
-        Self {
-            kind: HIRErrorKind::CyclicComponentBody { component },
-            span,
-        }
+        Self::new(HIRErrorKind::CyclicComponentBody { component }, span)
     }
 
     /// Creates a [`HIRErrorKind::GenericArityMismatch`] error.
@@ -548,26 +522,19 @@ impl HIRError {
         supplied: usize,
         span: Span,
     ) -> Self {
-        Self {
-            kind: HIRErrorKind::GenericArityMismatch {
+        Self::new(
+            HIRErrorKind::GenericArityMismatch {
                 func,
                 declared,
                 supplied,
             },
             span,
-        }
+        )
     }
 
     /// Creates a [`HIRErrorKind::CyclicMonomorphization`] error.
-    pub fn cyclic_monomorphization(
-        func: SymbolPointer,
-        args: Vec<DedupPoolId<HirType>>,
-        span: Span,
-    ) -> Self {
-        Self {
-            kind: HIRErrorKind::CyclicMonomorphization { func, args },
-            span,
-        }
+    pub fn cyclic_monomorphization(func: SymbolPointer, args: Vec<TermId>, span: Span) -> Self {
+        Self::new(HIRErrorKind::CyclicMonomorphization { func, args }, span)
     }
 
     /// Creates a [`HIRErrorKind::AmbiguousDeclaration`] error.
@@ -577,26 +544,53 @@ impl HIRError {
         second: FileId,
         span: Span,
     ) -> Self {
-        Self {
-            kind: HIRErrorKind::AmbiguousDeclaration {
+        Self::new(
+            HIRErrorKind::AmbiguousDeclaration {
                 name,
                 first,
                 second,
             },
             span,
-        }
+        )
+    }
+
+    /// Creates a [`HIRErrorKind::NotImplemented`] error for the given declaration.
+    pub fn not_implemented(name: SymbolPointer, span: Span) -> Self {
+        Self::new(HIRErrorKind::NotImplemented(name), span)
     }
 }
 
 impl std::fmt::Display for HIRError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.kind {
+            HIRErrorKind::MissingExtensionMethod { .. } => {
+                write!(f, "Method not found for interface",)
+            }
+            HIRErrorKind::UnexpectedTypeUsage {
+                expected_usage,
+                actual,
+            } => {
+                write!(
+                    f,
+                    "Unexpected type usage: expected {:?}, got {:?}",
+                    expected_usage, actual
+                )
+            }
+            HIRErrorKind::UnimplementedFeature(feature) => {
+                write!(f, "Unimplemented feature: '{:?}'", feature)
+            }
             HIRErrorKind::InvalidEnumUsage(_) => write!(f, "Invalid enum usage"),
-            HIRErrorKind::MethodNotFound(_) => {
+            HIRErrorKind::MethodNotFound(_, _) => {
                 write!(f, "Method not found")
             }
-            HIRErrorKind::StaticMethodNotFound(_) => {
+            HIRErrorKind::StaticMethodNotFound(_, _) => {
                 write!(f, "Static method not found")
+            }
+            HIRErrorKind::DuplicateInterfaceImplementation { .. } => {
+                write!(f, "Type implements the same interface more than once")
+            }
+            HIRErrorKind::UnresolvedInterfaceCall { .. } => {
+                write!(f, "No implementation of this interface method was found")
             }
             HIRErrorKind::InvalidTypeAccess => write!(f, "Invalid type access"),
             HIRErrorKind::ExpressionNotMutable(_) => write!(f, "Expression not mutable"),
@@ -633,19 +627,20 @@ impl std::fmt::Display for HIRError {
             HIRErrorKind::UnexpectedType { .. } => {
                 write!(f, "Received mismatched types")
             }
+
             HIRErrorKind::InvalidIndexing(_) => write!(
                 f,
                 "The given expression cannot be indexed because it is not an array nor vector"
             ),
-            HIRErrorKind::CouldntInfer => write!(f, "Expression type couldn't be infered"),
+            HIRErrorKind::CouldntInfer => write!(f, "Expression type couldn't be inferred"),
             HIRErrorKind::ComponentNotFound(_) => write!(f, "Component not found"),
-            HIRErrorKind::NotAComponent(_) => write!(f, "Atempt to use value as a component"),
+            HIRErrorKind::NotAComponent(_) => write!(f, "Attempt to use value as a component"),
             HIRErrorKind::ComponentPropertyMissingType => {
                 write!(f, "Component property is missing type definition")
             }
 
             HIRErrorKind::InvalidWrite(InvalidWriteReason::ImmutableVariable(_)) => {
-                write!(f, "Atempt to write on a imutable variable")
+                write!(f, "Attempt to write on an immutable variable")
             }
             HIRErrorKind::InvalidWrite(InvalidWriteReason::ExpressionNotAssignable) => {
                 write!(f, "The expression is not assignable")
@@ -670,6 +665,7 @@ impl std::fmt::Display for HIRError {
             HIRErrorKind::MissingProperty { .. } => write!(f, "Missing required property"),
             HIRErrorKind::PropertyNotRecognized { .. } => write!(f, "Property not recognized"),
             HIRErrorKind::PropertyNotVisible { .. } => write!(f, "Property not visible"),
+            HIRErrorKind::MethodNotVisible { .. } => write!(f, "Method not visible"),
             HIRErrorKind::InvalidChild => write!(f, "Invalid child expression"),
             HIRErrorKind::InvalidType { reason, .. } => write!(f, "Invalid type: {reason}"),
             HIRErrorKind::RecursiveType { .. } => write!(f, "Recursive type definition"),
@@ -737,6 +733,9 @@ impl std::fmt::Display for HIRError {
                     f,
                     "monomorphization of generic function '{func:?}' does not terminate"
                 )
+            }
+            HIRErrorKind::NotImplemented(name) => {
+                write!(f, "'{name:?}' uses a construct that is not implemented yet")
             }
         }
     }

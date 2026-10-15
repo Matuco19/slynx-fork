@@ -10,12 +10,11 @@ use std::{
 use common::{FrontendSymbol, SymbolsModule, pool::DedupPool};
 use dashmap::DashMap;
 use module_loader::{Modules, SourceLoader, SourceProvider};
-use slynx_codegen::Codegen;
+use slynx_codegen::LoweringState;
 use slynx_hir::{SlynxHir, id::AnyDeclarationId, ownership::OwnershipAnalysis};
 use slynx_ir::SlynxIR;
-use slynx_lexer::{Lexer, TokenStream};
 use slynx_monomorphizer::Monomorphizer;
-use slynx_parser::{ASTExpression, ASTStatement, Parser, Program, Type};
+use slynx_parser::{ASTExpression, ASTStatement, Type};
 
 pub use crate::compilation_context::errors::*;
 
@@ -185,7 +184,7 @@ impl SlynxContext {
         }
     }
 
-    pub fn new(entry_point: PathBuf, std_path: Option<PathBuf>) -> std::io::Result<Self> {
+    pub fn new(entry_point: PathBuf, std_path: Option<PathBuf>) -> Result<Self, SlynxError> {
         let entry_point = Arc::new(entry_point);
         let mut out = Self {
             files: FilesProvider::new(),
@@ -193,7 +192,7 @@ impl SlynxContext {
             std: Self::std_dir(std_path),
             pools: GlobalPools::new(),
         };
-        out.insert_file(&entry_point)?;
+        out.insert_file(&entry_point);
         Ok(out)
     }
 
@@ -220,9 +219,8 @@ impl SlynxContext {
     }
 
     ///Inserts the file with provided `path` if it exists.
-    pub fn insert_file(&mut self, path: &Path) -> std::io::Result<()> {
-        self.files.read(path)?;
-        Ok(())
+    pub fn insert_file(&mut self, path: &Path) {
+        self.files.read(path).unwrap();
     }
 
     ///Registers a file that was already loaded by the source loader.
@@ -268,7 +266,13 @@ impl SlynxContext {
         }
 
         let char_len = source.chars().count();
-        let clamped_index = index.min(char_len.saturating_sub(1));
+
+        let byte_index = index.min(source.len().saturating_sub(1));
+        let clamped_index = source
+            .char_indices()
+            .take_while(|(offset, _)| *offset < byte_index)
+            .count()
+            .min(char_len.saturating_sub(1));
         let line_idx = match lines.binary_search(&clamped_index) {
             Ok(line) | Err(line) => line,
         };
@@ -285,12 +289,14 @@ impl SlynxContext {
 
         let start = Self::char_index_to_byte_offset(source, line_start_char);
         let end = Self::char_index_to_byte_offset(source, line_end_char);
-        let column = end.min(clamped_index.saturating_sub(line_start_char) + 1);
+
+        let column_end = line_end_char - line_start_char;
+        let column = clamped_index.saturating_sub(line_start_char) + 1;
 
         LineInfo {
             line: line_idx + 1,
             column_start: column,
-            column_end: end,
+            column_end,
             src: source[start..end].to_string(),
         }
     }
@@ -298,24 +304,6 @@ impl SlynxContext {
     ///The name of the file this context is parsing
     pub fn file_name(&self) -> String {
         self.entry_point.to_string_lossy().to_string()
-    }
-
-    ///Builds the token stream to be used by the Parser from the source code
-    pub fn build_tokens(&self) -> Result<TokenStream, SlynxError> {
-        Lexer::tokenize(&self.get_entry_point_source()).map_err(|e| self.handle_lexer_error(e))
-    }
-
-    ///Builds the Slynx AST from the given `tokens` stream.
-    pub fn build_parser(&self, tokens: TokenStream) -> Result<Program, SlynxError> {
-        Parser::new(
-            tokens,
-            &self.pools.names,
-            &self.pools.expressions,
-            &self.pools.statements,
-            &self.pools.types,
-        )
-        .parse_declarations()
-        .map_err(|e| self.handle_parser_error(&e))
     }
 
     pub fn load_modules<'a>(&'a self) -> Result<Modules<'a>, SlynxError> {
@@ -334,7 +322,7 @@ impl SlynxContext {
         let modules = { loader.load(entry, std, &mut on_load, &self.files) };
         match modules {
             Ok(modules) => Ok(modules),
-            Err(e) => Err(self.handle_source_error(&e)),
+            Err(e) => Err(self.handle_source_error(e)),
         }
     }
 
@@ -343,14 +331,18 @@ impl SlynxContext {
         &self,
         ast: &'a Modules,
     ) -> Result<(SlynxHir<'a>, HashSet<AnyDeclarationId>, OwnershipAnalysis), SlynxError> {
-        let mut hir = SlynxHir::new(ast).map_err(|e| self.handle_hir_error(&e.0, &e.1))?;
+        let mut hir = SlynxHir::new(ast).map_err(|e| self.handle_hir_error(&e.0, e.1))?;
 
         let deadcode = self.monomorphize(&mut hir)?;
 
         // Run ownership analysis (move semantics + borrow checking)
         let ownership = OwnershipAnalysis::analyze(&hir);
-        if let Some(first_error) = ownership.errors.first() {
-            return Err(self.handle_ownership_error(&hir, first_error));
+        if !ownership.errors.is_empty() {
+            return Err(self.handle_ownership_error(
+                &hir,
+                &ownership.errors[0],
+                ownership.errors[0].backtrace.clone(),
+            ));
         }
 
         Ok((hir, deadcode, ownership))
@@ -361,7 +353,7 @@ impl SlynxContext {
         &self,
         hir: &mut SlynxHir,
     ) -> Result<HashSet<AnyDeclarationId>, SlynxError> {
-        Monomorphizer::resolve(hir).map_err(|e| self.handle_hir_error(hir, &e))
+        Monomorphizer::resolve(hir).map_err(|e| self.handle_hir_error(hir, e))
     }
 
     ///Builds a new IR from the given `hir`. It's assumed that it is already implemented
@@ -371,33 +363,16 @@ impl SlynxContext {
         deadcode: HashSet<AnyDeclarationId>,
         ownership: OwnershipAnalysis,
     ) -> Result<SlynxIR, SlynxError> {
-        let mut codegen = Codegen::new();
+        let codegen = LoweringState::new(&hir);
         codegen
-            .generate(&hir, deadcode, ownership)
-            .map_err(|e| self.build_ir_generation_error(&e, &hir))
+            .generate(deadcode, ownership)
+            .map_err(|e| self.build_ir_generation_error(e, &hir))
     }
 
     ///Builds typed HIR and IR once so callers can inspect or persist intermediate dumps
     ///before materializing the default `.sir` output.
     pub fn build_stages(self) -> Result<CompilationStages, SlynxError> {
-        let entry = (*self.entry_point).clone();
-        let modules = {
-            let std = self.std.clone();
-            let on_load = |path: &Path, source: &str| {
-                self.register_loaded_file(Arc::new(path.to_path_buf()), source.to_string());
-            };
-            let source = SourceLoader::new(
-                &self.pools.names,
-                &self.pools.statements,
-                &self.pools.expressions,
-                &self.pools.types,
-            );
-            source.load(entry, std, on_load, &self.files)
-        };
-        let modules = match modules {
-            Ok(modules) => modules,
-            Err(e) => return Err(self.handle_source_error(&e)),
-        };
+        let modules = self.load_modules()?;
         let (hir, deadcode, ownership) = self.build_hir(&modules)?;
         let ir = self.build_ir(hir, deadcode, ownership)?;
 

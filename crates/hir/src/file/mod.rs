@@ -1,6 +1,7 @@
 //! Module idealized to handle HirFiles, which is a file on the slynx codebase
 
 mod declarations;
+pub use declarations::DeclarationsPool;
 use std::ops::Deref;
 
 use common::pool::PoolId;
@@ -8,8 +9,7 @@ use module_loader::FileId;
 
 use crate::{
     DeclarationId, HirComponentDeclaration, HirEnumDeclaration, HirFunctionDeclaration,
-    HirObjectDeclaration, HirStaticDeclaration, HirStylesheetDeclaration, SymbolPointer,
-    file::declarations::FileDeclarations,
+    HirObjectDeclaration, SymbolPointer, file::declarations::FileDeclarations,
 };
 
 #[derive(Debug)]
@@ -21,7 +21,7 @@ pub struct HirFile {
 macro_rules! create_methods {
     ($($name: ident = $target:ident($typ:ty)),* $(,)?) => {
         $(
-            #[allow(dead_code)]
+
             pub(crate) fn $name(&self, arg: $typ) -> DeclarationId<$typ> {
                 let out = self.$target(arg);
                 DeclarationId::new(self.file, out)
@@ -41,12 +41,17 @@ impl HirFile {
     create_methods!(
         create_function = insert_at_functions(HirFunctionDeclaration),
         create_object = insert_at_objects(HirObjectDeclaration),
-        create_component = insert_at_components(HirComponentDeclaration),
-        create_static = insert_at_statik(HirStaticDeclaration),
-        create_stylesheet = insert_at_styles(HirStylesheetDeclaration),
+        // create_component = insert_at_components(HirComponentDeclaration),
+        // create_static = insert_at_statik(HirStaticDeclaration),
         create_enum = insert_at_enums(HirEnumDeclaration),
     );
 
+    ///Finds the free function declared under `name` in this file.
+    ///
+    ///Methods live in the same column but carry a `self_type` and are reachable
+    ///only through the type-keyed method table, so they are skipped: a method's
+    ///name is not unique within a file and matching one here would let a bare
+    ///call bind to a method instead of reporting the name as unresolved.
     pub fn find_function_with_name(
         &self,
         name: SymbolPointer,
@@ -55,7 +60,7 @@ impl HirFile {
             .declarations
             .functions
             .iter()
-            .position(|f| f.name == name)
+            .position(|f| f.name == name && f.self_type.is_none())
             .map(|idx| DeclarationId::new(self.file, PoolId::new(idx as u32)))
         //since internally its just an index, this gets the id properly.
     }

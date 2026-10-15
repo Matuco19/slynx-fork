@@ -5,7 +5,7 @@ use common::{
 use slynx_parser::{ASTExpression, Type, TypeContext};
 
 use crate::{
-    DeclarationId, HIRError, HirExpression, HirExpressionKind, HirFunctionDeclaration, HirType,
+    DeclarationId, HIRError, HirExpression, HirExpressionKind, HirFunctionDeclaration, Owned,
     Result, builders::HirQueueBuilder, generics::GenericTypeArguments,
 };
 
@@ -88,9 +88,8 @@ impl ExpressionBuilder {
         };
 
         let func_viewer = queue.hir.view(target);
-        let type_viewer = func_viewer.type_viewer();
-
-        let expected_args = type_viewer.arguments();
+        let func_owner = func_viewer.data().owner;
+        let (expected_args, return_type) = func_viewer.type_viewer();
 
         if expected_args.len() != total_arguments {
             let name = func_viewer.name();
@@ -102,19 +101,27 @@ impl ExpressionBuilder {
             ));
         }
         let mut generics = GenericTypeArguments::from_explicit(
-            queue
-                .get_node(self.file())
-                .resolve_call_generics(type_arguments, context)?,
+            type_arguments
+                .iter()
+                .map(|ty| {
+                    queue
+                        .lowerer
+                        .lower_type(queue, self.file(), *ty, context)
+                        .map(|owned| owned.term)
+                })
+                .collect::<Result<Vec<_>>>()?,
         );
         let args = {
             let transformed_arguments = arguments
                 .iter()
                 .zip(expected_args)
                 .map(|(arg, ty)| {
-                    let expected_ty = match queue.hir.view(*ty).raw() {
-                        HirType::GenericParam { index, .. } => generics.get(*index as usize),
-                        _ => None,
-                    };
+                    let expected_ty = queue
+                        .hir
+                        .view(*ty)
+                        .raw()
+                        .is_var_type()
+                        .and_then(|var| generics.get(var.index as usize));
 
                     let expr = self.build_expression(
                         queue,
@@ -124,8 +131,8 @@ impl ExpressionBuilder {
                             context,
                         },
                     )?;
-                    if let HirType::GenericParam { index, .. } = queue.hir.view(*ty).raw() {
-                        generics.try_set(*index as usize, queue.hir.view(expr.data).ty());
+                    if let Some(var) = queue.hir.view(*ty).raw().is_var_type() {
+                        generics.try_set(var.index as usize, queue.hir.view(expr.data).ty().term);
                     }
                     Ok(expr)
                 })
@@ -136,14 +143,14 @@ impl ExpressionBuilder {
                 .chain(transformed_arguments)
                 .collect()
         };
-        let ty = type_viewer.return_type();
+
         Ok(HirExpression {
             kind: HirExpressionKind::FunctionCall {
                 name: target,
                 args,
                 generics: generics.into_vec(),
             },
-            ty,
+            ty: Owned::new(func_owner, return_type),
         })
     }
 }

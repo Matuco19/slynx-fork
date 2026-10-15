@@ -4,7 +4,7 @@ use common::{
 };
 use slynx_parser::{ASTStatement, TypeContext};
 
-use crate::{HirStatement, HirType, Result, builders::HirQueueBuilder};
+use crate::{HirStatement, Result, builders::HirQueueBuilder, term::Term};
 
 use super::{ExpressionBuilder, ExpressionDescriptor};
 
@@ -16,7 +16,7 @@ impl ExpressionBuilder {
         context: &TypeContext,
     ) -> Result<Spanned<PoolId<HirStatement>>> {
         let (data, span) = self.build_statement_data(queue, statement, context)?;
-        let id = queue.hir.insert_statement(data);
+        let id = queue.hir.store.insert_statement(data);
         Ok(span.make_spanned(id))
     }
 
@@ -45,7 +45,12 @@ impl ExpressionBuilder {
             }
             ASTStatement::Var { name, ty, rhs } | ASTStatement::MutableVar { name, ty, rhs } => {
                 let var_type = if let Some(ty) = ty {
-                    Some(queue.get_node(self.file()).find_type(*ty, context)?.1)
+                    Some(
+                        queue
+                            .lowerer
+                            .lower_type(queue, self.file(), *ty, context)?
+                            .term,
+                    )
                 } else {
                     None
                 };
@@ -60,19 +65,19 @@ impl ExpressionBuilder {
                 let exprty = queue.hir.view(expr.data).ty();
                 let expected_type = if let Some(expected_ty) = ty {
                     queue
-                        .get_node(self.file())
-                        .find_type(*expected_ty, context)?
-                        .1
+                        .lowerer
+                        .lower_type(queue, self.file(), *expected_ty, context)?
+                        .term
                 } else {
-                    exprty
+                    exprty.term
                 };
-                let ty = self.unify_types(queue, exprty, expected_type, statement.span)?;
+                let ty = self.unify_terms(queue, exprty.term, expected_type, statement.span)?;
                 let varid = self.create_variable(
                     *name,
                     matches!(stmt, ASTStatement::MutableVar { .. }),
                     ty,
                 );
-                queue.hir.variable_names.insert(varid, *name);
+                queue.hir.store.variable_names.insert(varid, *name);
 
                 HirStatement::Variable {
                     name: varid,
@@ -97,10 +102,10 @@ impl ExpressionBuilder {
                         context,
                     },
                 )?;
-                self.unify_types(
+                self.unify_terms(
                     queue,
-                    queue.hir.view(rhs.data).ty(),
-                    queue.hir.view(lhs.data).ty(),
+                    queue.hir.view(rhs.data).ty().term,
+                    queue.hir.view(lhs.data).ty().term,
                     statement.span,
                 )?;
                 HirStatement::Assign { lhs, value: rhs }
@@ -110,7 +115,7 @@ impl ExpressionBuilder {
                     queue,
                     ExpressionDescriptor {
                         target: *condition,
-                        expected: Some(queue.hir.create_type(HirType::Bool)),
+                        expected: Some(queue.hir.types.create_type(Term::boolean_type())),
                         context,
                     },
                 )?;

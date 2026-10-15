@@ -1,43 +1,50 @@
 use crate::{
-    HirType, SlynxHir, SymbolPointer,
+    Owned, SlynxHir, SymbolPointer,
     model::{HirExpression, HirExpressionKind},
+    term::{Term, TermId},
 };
-use common::{
-    Operator, Spanned,
-    pool::{DedupPoolId, PoolId},
-};
+use common::{Operator, Spanned, pool::PoolId};
+use module_loader::FileId;
 
 impl<'a> SlynxHir<'a> {
-    /// Creates a string literal expression.
-    pub(crate) fn create_strliteral_expression(&self, s: SymbolPointer) -> HirExpression {
+    /// Creates a string literal expression owned by `owner`.
+    pub(crate) fn create_strliteral_expression(
+        &self,
+        owner: FileId,
+        s: SymbolPointer,
+    ) -> HirExpression {
         HirExpression {
-            ty: self.create_type(HirType::Str),
+            ty: Owned::new(owner, self.types.create_type(Term::string_type())),
             kind: HirExpressionKind::StringLiteral(s),
         }
     }
 
-    /// Creates an int expression that must be inferred.
-    pub(crate) fn create_int_expression(&self, i: i32, _bitlen: u8) -> HirExpression {
+    /// Creates an int expression that must be inferred, owned by `owner`.
+    pub(crate) fn create_int_expression(&self, owner: FileId, i: i32, bitlen: u8) -> HirExpression {
         HirExpression {
             kind: HirExpressionKind::Int(i),
-            ty: self.create_type(HirType::Int),
+            ty: Owned::new(
+                owner,
+                self.types.create_type(Term::signed_integer_type(bitlen)),
+            ),
         }
     }
 
-    /// Creates a float expression.
-    pub(crate) fn create_float_expression(&self, float: f32) -> HirExpression {
+    /// Creates a float expression owned by `owner`.
+    pub(crate) fn create_float_expression(&self, owner: FileId, float: f32) -> HirExpression {
         HirExpression {
             kind: HirExpressionKind::Float(float.into()),
-            ty: self.create_type(HirType::Float),
+            ty: Owned::new(owner, self.types.create_type(Term::float32_type())),
         }
     }
-    /// Creates a binary expression.
+    /// Creates a binary expression owned by `owner`.
     pub(crate) fn create_binary_expression(
         &self,
+        owner: FileId,
         left: Spanned<PoolId<HirExpression>>,
         right: Spanned<PoolId<HirExpression>>,
         operator: Operator,
-        ty: DedupPoolId<HirType>,
+        ty: TermId,
     ) -> HirExpression {
         HirExpression {
             kind: HirExpressionKind::Binary {
@@ -45,7 +52,7 @@ impl<'a> SlynxHir<'a> {
                 op: operator,
                 rhs: right,
             },
-            ty,
+            ty: Owned::new(owner, ty),
         }
     }
 }

@@ -1,4 +1,4 @@
-use crate::{Parser, Result, TypeParamScope, flags::ParserFlag};
+use crate::{Parser, Result, SymbolPointer, flags::ParserFlags};
 use slynx_lexer::tokens::TokenKind;
 
 use crate::ast::ASTStatement;
@@ -11,9 +11,9 @@ impl Parser<'_> {
     pub fn parse_let_statement(
         &mut self,
         letspan: Span,
-        type_params: TypeParamScope,
+        type_params: &[SymbolPointer],
+        flags: ParserFlags,
     ) -> Result<Spanned<DedupPoolId<ASTStatement>>> {
-        self.add_flag(ParserFlag::RequireSemicolon);
         let mutable = if let TokenKind::Mut = self.peek()?.kind {
             self.eat()?;
             true
@@ -31,9 +31,11 @@ impl Parser<'_> {
             _ => None,
         };
         self.expect(&TokenKind::Eq)?; //eat '='
-        let rhs = self.parse_expression(type_params)?;
+        // A `let` is always terminated by a ';', on top of whatever context the
+        // surrounding block established.
+        let rhs = self.parse_expression(type_params, flags | ParserFlags::REQUIRE_SEMICOLON)?;
         let span = letspan.merge_with(rhs.span);
-        let id = self.intern_statment(if mutable {
+        let id = self.intern_statement(if mutable {
             ASTStatement::MutableVar {
                 name: name.data,
                 ty: vartype,
@@ -52,68 +54,71 @@ impl Parser<'_> {
     pub fn parse_while_statement(
         &mut self,
         span: Span,
-        type_params: TypeParamScope,
+        type_params: &[SymbolPointer],
+        flags: ParserFlags,
     ) -> Result<Spanned<DedupPoolId<ASTStatement>>> {
-        self.reset_flags();
+        let condition = self.parse_expression(type_params, flags)?;
 
-        let condition = self.parse_expression(type_params)?;
+        let (body, block_span) = self.parse_block(type_params, flags)?;
 
-        let (body, block_span) = self.parse_block(type_params)?;
-
-        let id = self.intern_statment(ASTStatement::While { condition, body });
+        let id = self.intern_statement(ASTStatement::While { condition, body });
         Ok(Spanned::new(id, span.merge_with(block_span)))
     }
 
     pub fn parse_return_statement(
         &mut self,
         span: Span,
-        type_params: TypeParamScope,
+        type_params: &[SymbolPointer],
+        flags: ParserFlags,
     ) -> Result<Spanned<DedupPoolId<ASTStatement>>> {
-        self.add_flag(ParserFlag::RequireSemicolon);
+        // A `return` is always terminated by a ';', on top of whatever context the
+        // surrounding block established.
+        let semicoloned = flags | ParserFlags::REQUIRE_SEMICOLON;
         let value = if matches!(self.peek()?.kind, TokenKind::SemiColon) {
             None
         } else {
-            Some(self.parse_expression(type_params)?)
+            Some(self.parse_expression(type_params, semicoloned)?)
         };
         let end_span = value.as_ref().map(|v| v.span).unwrap_or(span);
-        let id = self.intern_statment(ASTStatement::Return { value });
+        let id = self.intern_statement(ASTStatement::Return { value });
         Ok(Spanned::new(id, span.merge_with(end_span)))
     }
 
     pub fn parse_statement(
         &mut self,
-        type_params: TypeParamScope,
+        type_params: &[SymbolPointer],
+        flags: ParserFlags,
     ) -> Result<Spanned<DedupPoolId<ASTStatement>>> {
         match self.peek()?.kind {
             TokenKind::Let => {
                 let span = self.eat()?.span;
-                self.parse_let_statement(span, type_params)
+                self.parse_let_statement(span, type_params, flags)
             }
 
             TokenKind::While => {
                 let span = self.eat()?.span; //Consume "While"
-                self.parse_while_statement(span, type_params)
+                self.parse_while_statement(span, type_params, flags)
             }
 
             TokenKind::Return => {
                 let span = self.eat()?.span;
-                self.parse_return_statement(span, type_params)
+                self.parse_return_statement(span, type_params, flags)
             }
 
             _ => {
-                let expr = self.parse_expression(type_params)?;
-                self.add_flag(ParserFlag::RequireSemicolon);
+                let expr = self.parse_expression(type_params, flags)?;
+
                 if matches!(self.peek()?.kind, TokenKind::Eq)
                     && self.expressions.get(expr.data).is_assignable()
                 {
                     self.eat()?;
-                    let rhs = self.parse_expression(type_params)?;
+                    let rhs = self.parse_expression(type_params, flags)?;
                     let span = expr.span.merge_with(rhs.span);
-                    let id = self.intern_statment(ASTStatement::Assign { lhs: expr, rhs });
+                    let id = self.intern_statement(ASTStatement::Assign { lhs: expr, rhs });
                     Ok(Spanned::new(id, span))
                 } else {
                     let span = expr.span;
-                    let id = self.intern_statment(ASTStatement::Expression(expr));
+                    let id = self.intern_statement(ASTStatement::Expression(expr));
                     Ok(Spanned::new(id, span))
                 }
             }

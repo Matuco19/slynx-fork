@@ -1,52 +1,49 @@
 mod components;
 mod enums;
+mod methods;
+mod registry;
+mod storage;
 mod structs;
-mod styles;
-use std::{
-    collections::{HashSet, VecDeque},
-    ops::Index,
-};
+use std::ops::Index;
 
-use common::{
-    Span,
-    pool::{DedupPool, DedupPoolId},
-};
+use common::pool::DedupPoolId;
 use dashmap::{DashMap, DashSet};
+use module_loader::FileId;
 
 use crate::{
-    ComponentType, DeclarationId, EnumType, EnumVariantType, FunctionType, HIRError,
-    HirFunctionDeclaration, HirType, Result, StructType, StyleType, SymbolPointer, TupleType,
-    VariableId, context::types::styles::StylesPool, helpers::Visible,
+    ComponentType, DeclarationId, EnumType, EnumVariantType, HirFunctionDeclaration, InterfaceType,
+    Result, StructField, StructType, SymbolPointer, TupleType, VariableId,
+    helpers::Visible,
+    interface::InterfaceTerm,
+    term::{ExtensionNode, Term, TermId, TermNode},
 };
-pub use components::ComponentDefinition;
-use components::*;
-use enums::*;
-pub use structs::StructDefinition;
-pub use styles::StyleMetadata;
 
-use structs::*;
+pub use methods::{InterfaceMethodSignature, MethodTable};
+pub use registry::TypeRegistry;
+pub use storage::TypeStorage;
 
 #[derive(Debug)]
 /// Manages all types in the HIR, including built-ins, user-defined types, and variables.
+///
+/// This is a thin facade over three single-purpose collaborators:
+/// - [`TypeStorage`] — the deduplicated pools holding type shapes,
+/// - [`TypeRegistry`] — the name→type-id mapping,
+/// - [`MethodTable`] — methods attached to any type.
+///
+/// It additionally tracks variables and externally-marked types.
 pub struct TypesContext {
     ///Maps a variable to it's type
-    pub variables: DashMap<VariableId, DedupPoolId<HirType>>,
-    pub names: DashMap<SymbolPointer, DedupPoolId<HirType>>,
-    pub methods: DashMap<
-        DedupPoolId<HirType>,
-        DashMap<SymbolPointer, DeclarationId<HirFunctionDeclaration>>,
-    >,
-    /// Maps (parent_type, method_name) -> return_type for external object methods.
-    external_methods: DashMap<(DedupPoolId<HirType>, SymbolPointer), DedupPoolId<HirType>>,
-    /// Set of DedupPoolId<HirType>s that are external (from JS/interop).
+    pub variables: DashMap<VariableId, TermId>,
+    /// Deduplicated pools holding every type shape.
+    pub storage: TypeStorage,
+    /// Maps names to the type ids they refer to.
+    pub registry: TypeRegistry,
+    /// Methods attached to types. Methods may be registered on any type id,
+    /// so any value can carry methods.
+    pub methods: MethodTable,
+    /// Set of TermIds that are external (from JS/interop).
     /// When a type is marked external, all references to it are also external.
-    externals: DashSet<DedupPoolId<HirType>>,
-    structs: StructsPool,
-    components: ComponentsPool,
-    styles: StylesPool,
-    enums: EnumsPool,
-    functions: DedupPool<FunctionType>,
-    types: DedupPool<HirType>,
+    externals: DashSet<TermId>,
 }
 impl Default for TypesContext {
     fn default() -> Self {
@@ -57,61 +54,51 @@ impl TypesContext {
     /// Creates a new [`TypesContext`] with built-in types pre-registered under the given symbol names.
     pub fn new() -> Self {
         Self {
-            names: DashMap::new(),
             variables: DashMap::new(),
-            methods: DashMap::new(),
-            external_methods: DashMap::new(),
+            storage: TypeStorage::default(),
+            registry: TypeRegistry::new(),
+            methods: MethodTable::new(),
             externals: DashSet::new(),
-            types: DedupPool::new(),
-            functions: DedupPool::new(),
-            structs: StructsPool::default(),
-            components: ComponentsPool::default(),
-            styles: StylesPool::default(),
-            enums: EnumsPool::default(),
         }
     }
 
     /// Number of distinct types in the type pool.
     pub fn len(&self) -> usize {
-        self.types.len()
+        self.storage.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.storage.is_empty()
     }
 
     ///Inserts a new variable on this Context
-    pub fn insert_variable(&self, varid: VariableId, ty: DedupPoolId<HirType>) {
+    pub fn insert_variable(&self, varid: VariableId, ty: TermId) {
         self.variables.insert(varid, ty);
     }
 
-    pub fn create_function_type(
-        &self,
-        args: Vec<DedupPoolId<HirType>>,
-        ret: DedupPoolId<HirType>,
-    ) -> DedupPoolId<HirType> {
-        let fid = self.functions.insert(FunctionType {
-            args: args.into(),
-            ret,
-        });
-        self.create_type(HirType::Function(fid))
+    /// Returns the [`TermId`] of the given variable, if it has been registered.
+    pub fn get_variable(&self, id: &VariableId) -> Option<TermId> {
+        self.variables.get(id).map(|v| *v.value())
+    }
+
+    pub fn create_function_type(&self, args: Vec<TermId>, ret: TermId) -> TermId {
+        self.storage.insert_type(Term::function_type(args, ret))
     }
 
     /// Creates a new tuple type with the given field types and returns its [`TypeId`].
-    pub fn create_tuple_type(&self, fields: Vec<DedupPoolId<HirType>>) -> DedupPoolId<HirType> {
-        let tuple = self.structs.insert_at_tuples(TupleType { fields });
-        self.types.insert(HirType::Tuple(tuple))
+    pub fn create_tuple_type(&self, fields: Vec<TermId>) -> TermId {
+        self.storage.insert_type(Term::tuple_type(fields))
     }
 
     pub fn create_struct_type(
         &self,
+        owner: FileId,
         name: SymbolPointer,
-        fields: Vec<Visible<(SymbolPointer, DedupPoolId<HirType>)>>,
-        methods: Vec<Visible<(SymbolPointer, DeclarationId<HirFunctionDeclaration>)>>,
-    ) -> DedupPoolId<HirType> {
-        let (id, _) = self.structs.insert(name, fields, methods);
-        let id = self.create_type(HirType::Struct(id));
-        self.names.insert(name, id);
+        fields: Vec<Visible<(SymbolPointer, TermId)>>,
+    ) -> TermId {
+        let id = self.storage.structs.insert_struct(name, fields, owner);
+        let id = self.storage.insert_type(Term::struct_type(id));
+        self.registry.register(name, id);
         id
     }
 
@@ -123,29 +110,25 @@ impl TypesContext {
     ///This prevents specialization/substitution from registering a duplicate
     ///enum under the same name and silently re-pointing the namespace at a
     ///sibling type while older references still hold the original id.
-    pub fn create_enum_type(
-        &self,
-        name: SymbolPointer,
-        variants: Vec<EnumVariantType>,
-    ) -> DedupPoolId<HirType> {
-        if let Some(existing) = self.enums.find_by_name(name) {
-            return self.create_type(HirType::Enum(existing));
+    pub fn create_enum_type(&self, name: SymbolPointer, variants: Vec<EnumVariantType>) -> TermId {
+        if let Some(existing) = self.storage.enums.find_by_name(name) {
+            return self.storage.insert_type(Term::enum_type(existing));
         }
-        let id = self.enums.insert(name, variants);
-        let id = self.create_type(HirType::Enum(id));
-        self.names.insert(name, id);
+        let id = self.storage.enums.insert_enum(name, variants);
+        let id = self.storage.insert_type(Term::enum_type(id));
+        self.registry.register(name, id);
         id
     }
 
     ///Returns the name of the enum associated with the given `id`.
     pub fn get_enum_name(&self, id: DedupPoolId<EnumType>) -> SymbolPointer {
-        self.enums[id].name
+        self.storage.get_enum_name(id)
     }
 
     ///Returns the variants of the enum associated with the given `id`, in
     ///declaration order.
     pub fn get_enum_variants(&self, id: DedupPoolId<EnumType>) -> &[EnumVariantType] {
-        &self.enums[id].variants
+        self.storage.get_enum_variants(id)
     }
 
     ///Finds the variant with the given `name` on the enum associated with `id`.
@@ -154,302 +137,229 @@ impl TypesContext {
         id: DedupPoolId<EnumType>,
         name: SymbolPointer,
     ) -> Option<usize> {
-        self.get_enum_variants(id)
-            .iter()
-            .position(|variant| variant.name == name)
+        self.storage.find_enum_variant(id, name)
     }
 
     pub fn create_component_type(
         &self,
         name: SymbolPointer,
-        properties: Vec<(SymbolPointer, DedupPoolId<HirType>)>,
+        owner: FileId,
+        properties: Vec<(SymbolPointer, TermId)>,
         children: Vec<DedupPoolId<ComponentType>>,
-    ) -> DedupPoolId<HirType> {
-        let (comp_ty, _) = self.components.insert(name, properties, children);
-        let id = self.create_type(HirType::Component(comp_ty));
-        self.names.insert(name, id);
+    ) -> TermId {
+        let comp_ty = self
+            .storage
+            .components
+            .insert_component(name, owner, properties, children);
+        let id = self.storage.insert_type(Term::component_type(comp_ty));
+        self.registry.register(name, id);
         id
     }
 
-    pub fn create_style_type(
+    pub fn create_interface_type(
         &self,
         name: SymbolPointer,
-        args: Vec<DedupPoolId<HirType>>,
-    ) -> DedupPoolId<HirType> {
-        let metadata = self.styles.insert_at_metadata(StyleMetadata { name });
-        let style_id = self.styles.insert_at_styles(StyleType {
-            args: args.into(),
-            metadata,
+        methods: Vec<(SymbolPointer, TermId)>,
+        super_interfaces: Vec<TermId>,
+    ) -> TermId {
+        let interface_type = self.storage.interfaces.insert(InterfaceType {
+            name,
+            methods,
+            super_interfaces,
         });
-        let id = self.create_type(HirType::Style(style_id));
-        self.names.insert(name, id);
+        let interface = InterfaceTerm {
+            raw: interface_type,
+        };
+        let id = self.storage.insert_type(Term::extension_type(interface));
+        self.registry.register(name, id);
         id
     }
 
-    pub fn get_component_definition(
-        &self,
-        comp: DedupPoolId<ComponentType>,
-    ) -> &ComponentDefinition {
-        let meta = self.components[comp].metadata;
-        &self.components[meta]
+    pub fn create_alias_type(&self, name: SymbolPointer, ty: Term) -> TermId {
+        let id = self.storage.insert_type(ty);
+        self.registry.register(name, id);
+        id
     }
 
-    pub fn create_alias_type(&self, name: SymbolPointer, ty: HirType) -> DedupPoolId<HirType> {
-        let id = self.create_type(ty);
-        self.names.insert(name, id);
-        id
+    ///Creates a new extension type from the provided `ext`
+    pub fn create_extension_type<Ext: ExtensionNode>(&self, ext: Ext) -> TermId {
+        self.create_type(Term::extension_type(ext))
     }
 
     ///Inserts the provided `ty` to have the provided `name`
-    pub fn create_type(&self, ty: HirType) -> DedupPoolId<HirType> {
-        self.types.insert(ty)
+    pub fn create_type(&self, ty: Term) -> TermId {
+        self.storage.insert_type(ty)
     }
 
-    ///Returns the inner object from the provided `ty`, returns None if the type is not a object
-    pub fn get_object(&self, ty: DedupPoolId<HirType>) -> Option<DedupPoolId<HirType>> {
-        let mut visited = HashSet::new();
-        let mut current = ty;
-        loop {
-            if !visited.insert(current) {
-                return None;
-            }
-
-            match self[current] {
-                HirType::Struct { .. } => return Some(current),
-                HirType::Reference { rf, .. } => current = rf,
-                _ => return None,
-            }
-        }
+    pub fn get_component_name(&self, ty: DedupPoolId<ComponentType>) -> SymbolPointer {
+        self.storage.components[ty].name
     }
 
-    ///Returns the inner component from the provided `ty`, returns None if the type is not a object
-    pub fn get_component(&self, ty: &DedupPoolId<HirType>) -> Option<DedupPoolId<HirType>> {
-        let mut visited = HashSet::new();
-        let mut current = *ty;
-        loop {
-            if !visited.insert(current) {
-                return None;
-            }
+    ///The file the given component was declared in.
+    ///
+    ///Every consumer that rebuilds or stamps a component reads its owner from
+    ///the type itself rather than being handed one by its caller. A component
+    ///tree mixes declarations from several files — a child written in an
+    ///imported file is not owned by the file that nests it — so an owner
+    ///threaded down from the root would silently stamp the wrong file on every
+    ///descendant.
+    pub fn get_component_owner(&self, ty: DedupPoolId<ComponentType>) -> FileId {
+        self.storage.components[ty].owner
+    }
 
-            match self[current] {
-                HirType::Component { .. } => return Some(current),
-                HirType::Reference { rf, .. } => current = rf,
-                _ => return None,
-            }
-        }
+    ///The file the given struct was declared in.
+    pub fn get_struct_owner(&self, ty: DedupPoolId<StructType>) -> FileId {
+        self.storage.structs[ty].owner
     }
 
     ///Registers a method for the given `ty` on the current declaration context with the given `name` that points to the given `id`. It should be asserted by the HIR to be a function ID
     pub fn create_method(
         &self,
-        ty: DedupPoolId<HirType>,
+        ty: TermId,
         name: SymbolPointer,
-        id: DeclarationId<HirFunctionDeclaration>,
+        id: Visible<DeclarationId<HirFunctionDeclaration>>,
     ) {
-        if !self.methods.contains_key(&ty) {
-            self.methods.insert(ty, DashMap::new());
-        }
-        self.methods.get(&ty).unwrap().insert(name, id);
+        self.methods.create_method(ty, name, id);
     }
 
     /// Register an external method's return type without creating a declaration entry.
     pub fn register_external_method(
         &self,
-        parent_ty: DedupPoolId<HirType>,
+        parent_ty: TermId,
         name: SymbolPointer,
-        return_type: DedupPoolId<HirType>,
+        return_type: TermId,
     ) {
-        self.external_methods.insert((parent_ty, name), return_type);
+        self.methods
+            .register_external_method(parent_ty, name, return_type);
     }
 
     /// Returns the return type of an external method on `parent_ty` with the given `name`.
     pub fn get_method_return_type(
         &self,
-        parent_ty: &DedupPoolId<HirType>,
+        parent_ty: &TermId,
         name: SymbolPointer,
-    ) -> Option<DedupPoolId<HirType>> {
-        self.external_methods
-            .get(&(*parent_ty, name))
-            .map(|ret| *ret.value())
+    ) -> Option<TermId> {
+        self.methods.get_method_return_type(parent_ty, name)
+    }
+
+    ///Returns the declaration of the method `name` already materialized on
+    ///`ty`, if any.
+    ///
+    ///This is the single source of truth for methods: a method is keyed by the
+    ///pair `(owning type, method name)` because two types may declare the same
+    ///method name, so it deliberately does not live in the `SymbolRegistry`,
+    ///which is keyed by `(file, symbol)` and is reserved for free functions.
+    ///`None` means the method has not been resolved yet.
+    pub fn method_of(
+        &self,
+        ty: TermId,
+        name: SymbolPointer,
+    ) -> Option<Visible<DeclarationId<HirFunctionDeclaration>>> {
+        self.methods.method_of(ty, name)
     }
 
     ///Registers a method for the given `ty` on the current declaration context with the given `name` that points to the given `id`. It should be asserted by the HIR to be a function ID
     pub fn get_methods_of(
         &self,
-        ty: DedupPoolId<HirType>,
-    ) -> Vec<(SymbolPointer, DeclarationId<HirFunctionDeclaration>)> {
-        if let Some(methos_map) = self.methods.get(&ty) {
-            let mut out = Vec::with_capacity(methos_map.len());
-            for entry in methos_map.iter() {
-                let (key, value) = entry.pair();
-                out.push((*key, *value));
-            }
-            out
-        } else {
-            Vec::new()
-        }
+        ty: TermId,
+    ) -> Vec<(
+        SymbolPointer,
+        Visible<DeclarationId<HirFunctionDeclaration>>,
+    )> {
+        self.methods.get_methods_of(ty)
     }
 
-    pub fn get_style_name(&self, s: DedupPoolId<StyleType>) -> SymbolPointer {
-        let metadata = self.styles[s].metadata;
-        self.styles.index(metadata).name
+    ///Registers the signature declaration of a method declared by an interface.
+    pub fn create_interface_method(&self, signature: InterfaceMethodSignature) {
+        self.methods.create_interface_method(signature);
     }
 
-    ///Retrieves the DedupPoolId<HirType> of the provided `name` on the currentContext
-    pub fn get_id_of_name(&self, name: &SymbolPointer) -> Option<DedupPoolId<HirType>> {
-        self.names.get(name).map(|v| *v.value())
+    ///Returns the signature declaration of the method `name` declared by the
+    ///given `interface`, if any.
+    pub fn interface_method_of(
+        &self,
+        interface: DedupPoolId<InterfaceType>,
+        name: SymbolPointer,
+    ) -> Option<DeclarationId<HirFunctionDeclaration>> {
+        self.methods.interface_method_of(interface, name)
+    }
+
+    ///Returns the interface method the given `declaration` is the signature of.
+    pub fn interface_signature(
+        &self,
+        declaration: DeclarationId<HirFunctionDeclaration>,
+    ) -> Option<InterfaceMethodSignature> {
+        self.methods.interface_signature(declaration)
+    }
+
+    ///Retrieves the TermId of the provided `name` on the currentContext
+    pub fn get_id_of_name(&self, name: &SymbolPointer) -> Option<TermId> {
+        self.registry.get_id_of_name(name)
     }
     pub fn get_struct_name(&self, s: DedupPoolId<StructType>) -> SymbolPointer {
-        let metadata = self.structs[s].metadata;
-        self.structs[metadata].name
+        self.storage.get_struct_name(s)
     }
-    pub fn get_struct_fields(&self, s: DedupPoolId<StructType>) -> &[Visible<SymbolPointer>] {
-        let metadata = self.structs[s].metadata;
-        &self.structs[metadata].fields
-    }
-
-    pub fn get_struct_field_types(&self, s: DedupPoolId<StructType>) -> &[DedupPoolId<HirType>] {
-        &self.structs[s].fields
-    }
-
-    pub fn get_struct_signature(
-        &self,
-        s: DedupPoolId<StructType>,
-    ) -> Vec<(&Visible<SymbolPointer>, &DedupPoolId<HirType>)> {
-        self.get_struct_fields(s)
-            .iter()
-            .zip(&self.structs[s].fields)
-            .collect()
-    }
-
-    /// Returns the [`DedupPoolId<HirType>`] of the given variable, if it has been registered.
-    pub fn get_variable(&self, id: &VariableId) -> Option<DedupPoolId<HirType>> {
-        self.variables.get(id).map(|v| *v.value())
+    pub fn get_struct_fields(&self, s: DedupPoolId<StructType>) -> &[Visible<StructField>] {
+        self.storage.get_struct_fields(s)
     }
 
     ///Retrieves the type of something by asserting the provided `ref_ty` is a reference type to it
-    pub fn get_type_from_ref(
-        &self,
-        ref_ty: DedupPoolId<HirType>,
-        span: &Span,
-    ) -> Result<DedupPoolId<HirType>> {
-        let mut visited = HashSet::new();
-        let mut current = ref_ty;
-        loop {
-            match self[current] {
-                HirType::Reference { rf, .. } => {
-                    if !visited.insert(current) {
-                        return Err(HIRError::recursive(current, *span));
-                    }
-                    current = rf;
-                }
-                _ => return Ok(current),
-            }
-        }
+    pub fn get_type_from_ref(&self, ref_ty: TermId, span: &common::Span) -> Result<TermId> {
+        self.storage.get_type_from_ref(ref_ty, span)
     }
 
-    pub fn is_cyclic(&self, ty: DedupPoolId<HirType>) -> bool {
-        let mut set = HashSet::new();
-        let mut queue = VecDeque::new();
-        queue.push_back(ty);
-        while let Some(ty) = queue.pop_front() {
-            if !set.insert(ty) {
-                return true;
-            }
-
-            match self[ty] {
-                HirType::Reference { rf, .. } => {
-                    queue.push_back(rf);
-                }
-                HirType::Struct(id) => {
-                    for field in &self[id].fields {
-                        queue.push_back(*field);
-                    }
-                }
-                HirType::Tuple(id) => {
-                    for field in &self[id].fields {
-                        queue.push_back(*field);
-                    }
-                }
-                HirType::Enum(id) => {
-                    for variant in &self[id].variants {
-                        for field in &variant.payload {
-                            queue.push_back(*field);
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        false
+    pub fn is_cyclic(&self, ty: TermId) -> bool {
+        self.storage.is_cyclic(ty)
     }
 
     /// Mark a type as external. Also traverses `Reference` wrappers to mark
     /// the inner struct type, so that all layers of indirection are covered.
-    pub fn mark_external(&self, ty: DedupPoolId<HirType>) {
+    pub fn mark_external(&self, ty: TermId) {
         self.externals.insert(ty);
         let mut current = ty;
-        while let HirType::Reference { rf, .. } = self[current] {
-            self.externals.insert(rf);
-            current = rf;
+        while let TermNode::Apply { target, .. } = self[current].node() {
+            self.externals.insert(*target);
+            current = *target;
         }
     }
 
     /// Returns `true` if the given type (or any `Reference` it wraps) has
     /// been marked as external.
-    pub fn is_external(&self, ty: &DedupPoolId<HirType>) -> bool {
+    pub fn is_external(&self, ty: &TermId) -> bool {
         if self.externals.contains(ty) {
             return true;
         }
 
         let mut current = *ty;
         loop {
-            match self[current] {
-                HirType::Reference { rf, .. } => {
-                    if self.externals.contains(&rf) {
+            match self[current].node() {
+                TermNode::Apply { target, .. } => {
+                    if self.externals.contains(target) {
                         return true;
                     }
-                    current = rf;
+                    current = *target;
                 }
                 _ => return false,
             }
         }
     }
+    pub fn create_term(&self, term: Term) -> TermId {
+        self.storage.terms.insert(term)
+    }
 }
 
 macro_rules! impl_index {
-    ($($ty:ident => |$this:ident, $idx:ident| $body:expr),* $(,)?) => {
+    ($($ty:ident),* $(,)?) => {
         $(
             impl Index<DedupPoolId<$ty>> for TypesContext {
                 type Output = $ty;
 
                 fn index(&self, index: DedupPoolId<$ty>) -> &Self::Output {
-                    let $this = self;
-                    let $idx = index;
-                    $body
+                    self.storage.index(index)
                 }
             }
         )*
     };
 }
 
-impl_index!(
-    HirType => | this,
-    idx | this.types.get(idx),
-    StructType => | this,
-    idx | &this.structs[idx],
-    StructDefinition => | this,
-    idx | &this.structs[idx],
-    TupleType => | this,
-    idx | &this.structs[idx],
-    EnumType => | this,
-    idx | &this.enums[idx],
-    ComponentType => | this,
-    idx | &this.components[idx],
-    ComponentDefinition => |this,
-    idx | &this.components[idx],
-    FunctionType => | this,
-    idx | &this.functions[idx],
-    StyleType => | this,
-    idx | &this.styles[idx]
-);
+impl_index!(Term, StructType, TupleType, EnumType, ComponentType,);

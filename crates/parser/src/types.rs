@@ -1,9 +1,6 @@
 use super::Parser;
-use crate::error::ParseError;
-use crate::{
-    ASTExpression, AliasDeclaration, ExpectedContent, SymbolPointer, Type, TypeParamScope,
-    TypedName,
-};
+use crate::flags::ParserFlags;
+use crate::{ASTExpression, AliasDeclaration, GenericsMetadata, SymbolPointer, Type, TypedName};
 use crate::{Result, ast::GenericIdentifier};
 use common::pool::DedupPoolId;
 use common::{Span, Spanned, VisibilityModifier};
@@ -17,10 +14,6 @@ enum TypeMutability {
 }
 
 impl Parser<'_> {
-    pub fn type_name(&self, ty: DedupPoolId<Type>, type_params: &[SymbolPointer]) -> SymbolPointer {
-        crate::type_name(self.types, self.symbols, self.expressions, ty, type_params)
-    }
-
     ///Represents the type of 'Self' on a method call
     pub fn self_type(&self) -> DedupPoolId<Type> {
         self.intern_type(Type::Plain(GenericIdentifier {
@@ -30,7 +23,7 @@ impl Parser<'_> {
     }
 
     ///Parses a typed name. A typed name is `name: type`, which is a name that contains a type
-    pub fn parse_typedname(&mut self, type_params: TypeParamScope) -> Result<Spanned<TypedName>> {
+    pub fn parse_typedname(&mut self, type_params: &[SymbolPointer]) -> Result<Spanned<TypedName>> {
         let ty = match self.peek()?.kind {
             TokenKind::BitAnd => {
                 self.eat()?;
@@ -61,31 +54,28 @@ impl Parser<'_> {
         Ok(Spanned::new(TypedName { name, kind: ty }, name.span))
     }
     ///Parses an alias declaration which follows `alias ty = AnotherType`
-    pub fn parse_alias(&mut self, init: Span) -> Result<AliasDeclaration> {
+    pub fn parse_alias(
+        &mut self,
+        init: Span,
+        visibility: VisibilityModifier,
+    ) -> Result<AliasDeclaration> {
         let (name, generics) = self.parse_generic_name()?;
-
+        let clauses = self.parse_clauses(&generics)?;
         self.expect(&TokenKind::Eq)?;
         let target = self.parse_type(&generics)?;
 
         self.expect(&TokenKind::SemiColon)?;
         Ok(AliasDeclaration {
-            type_params: generics,
-            visibility: VisibilityModifier::default(),
+            generics: GenericsMetadata {
+                type_params: generics,
+                clauses,
+                interface_implementations: Vec::new(),
+            },
+            visibility,
             span: init.merge_with(target.span),
             name,
             target,
         })
-    }
-
-    ///Looks up the given identifier in the currently in-scope type parameters.
-    ///Returns the index of the type parameter, so that `T` in
-    ///`func A<T>(arg: T)` maps to `Generic(0)`.
-    fn generic_param_index(
-        &self,
-        type_params: &[SymbolPointer],
-        ident: SymbolPointer,
-    ) -> Option<usize> {
-        type_params.iter().position(|name| *name == ident)
     }
 
     ///Parsing a generic name means that it will parse a name which contains after it generics, such as func F<T,K,Q>(){}, this function will then be called to parse F<T,K,Q> which is the name of the
@@ -96,14 +86,9 @@ impl Parser<'_> {
             return Ok((name.data, Vec::new()));
         }
         self.expect(&TokenKind::Lt)?;
-        let mut generics = Vec::new();
-        while self.peek()?.kind != TokenKind::Gt {
-            let name = self.expect_identifier()?;
-            if self.peek()?.kind == TokenKind::Comma {
-                self.eat()?;
-            }
-            generics.push(name.data);
-        }
+        let generics = self.parse_separated(TokenKind::Gt, TokenKind::Comma, true, |parser| {
+            Ok(parser.expect_identifier()?.data)
+        })?;
         self.expect(&TokenKind::Gt)?;
 
         Ok((name.data, generics))
@@ -171,7 +156,7 @@ impl Parser<'_> {
     ///Parses a type.
     pub fn parse_type(
         &mut self,
-        type_params: TypeParamScope,
+        type_params: &[SymbolPointer],
     ) -> Result<Spanned<DedupPoolId<Type>>> {
         let token = self.peek()?;
         let start_span = token.span;
@@ -205,24 +190,11 @@ impl Parser<'_> {
             }
             TokenKind::LParen => {
                 self.eat()?;
-                let mut types = smallvec![];
-                loop {
-                    types.push(self.parse_type(type_params)?);
-                    match self.peek()?.kind {
-                        TokenKind::Comma => {
-                            self.eat()?;
-                        }
-                        TokenKind::RParen => break,
-                        _ => {
-                            return Err(ParseError::UnexpectedToken(
-                                self.eat()?,
-                                ExpectedContent::Raw(
-                                    "Was expecting ',' or ')' in tuple type".into(),
-                                ),
-                            ));
-                        }
-                    }
-                }
+                let types: SmallVec<[Spanned<DedupPoolId<Type>>; 2]> = self
+                    .parse_separated(TokenKind::RParen, TokenKind::Comma, false, |parser| {
+                        parser.parse_type(type_params)
+                    })?
+                    .into();
                 let span = start_span.merge_with(self.eat()?.span);
                 let ty = if types.len() == 1 {
                     (types[0] as Spanned<DedupPoolId<Type>>).data
@@ -245,7 +217,7 @@ impl Parser<'_> {
                     self.eat()?;
                     TypeVariant::Vector
                 } else {
-                    let expr = self.parse_expression(type_params)?;
+                    let expr = self.parse_expression(type_params, ParserFlags::empty())?;
                     self.expect(&TokenKind::RBracket)?;
                     TypeVariant::Array(expr.data)
                 };
@@ -286,8 +258,6 @@ impl Parser<'_> {
                         identifier: ident.data,
                     }));
                     span.make_spanned(id)
-                } else if let Some(index) = self.generic_param_index(type_params, ident.data) {
-                    span.make_spanned(self.intern_type(Type::Generic(index as u8)))
                 } else {
                     let id = self.intern_type(Type::Plain(GenericIdentifier {
                         generic: smallvec![],
@@ -297,14 +267,8 @@ impl Parser<'_> {
                 }
             }
         };
-        if self.peek()?.kind == TokenKind::Question {
-            let end = self.eat()?.span;
-            let span = ty.span.merge_with(end);
-            let ty = self.intern_type(Type::Nullable(ty.data));
-            Ok(span.make_spanned(ty))
-        } else {
-            Ok(ty)
-        }
+
+        Ok(ty)
     }
 
     ///Looks ahead without consuming to check whether the current identifier is a

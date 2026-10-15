@@ -33,7 +33,12 @@
 //!
 //! All other types (structs, tuples, arrays, etc.) are Move-only.
 
-use crate::{HirType, SlynxHir, VariableId};
+use std::{backtrace::Backtrace, sync::Arc};
+
+use crate::{
+    SlynxHir, VariableId,
+    term::{PrimitiveType, TermId},
+};
 
 mod analysis;
 mod place;
@@ -59,6 +64,17 @@ pub enum ExpressionUse {
 pub struct OwnershipError {
     pub kind: OwnershipErrorKind,
     pub span: common::Span,
+    pub backtrace: Arc<Backtrace>,
+}
+
+impl OwnershipError {
+    pub fn new(kind: OwnershipErrorKind, span: common::Span) -> Self {
+        Self {
+            kind,
+            span,
+            backtrace: Arc::new(Backtrace::capture()),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -78,9 +94,11 @@ pub enum OwnershipErrorKind {
 }
 
 /// Check if a type is Copy (can be implicitly duplicated).
-pub fn is_copy_type(hir: &SlynxHir, ty: common::pool::DedupPoolId<HirType>) -> bool {
-    matches!(
-        hir.types_module[ty],
-        HirType::Int | HirType::Float | HirType::Bool | HirType::Str
-    )
+pub fn is_copy_type(hir: &SlynxHir, ty: TermId) -> bool {
+    let ty = &hir.types[ty];
+    ty.is_unsigned().is_some()
+        || ty.is_signed().is_some()
+        || ty.is_primitive() == Some(PrimitiveType::Float32)
+        || ty.is_primitive() == Some(PrimitiveType::Float64)
+        || ty.is_primitive() == Some(PrimitiveType::Void)
 }

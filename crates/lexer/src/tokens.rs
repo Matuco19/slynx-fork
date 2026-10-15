@@ -14,7 +14,7 @@ pub enum TokenKind {
     // Comments (skip)
     #[regex(r"//[^\n]*", logos::skip, allow_greedy = true)]
     #[regex(r"/\*[^*]*\*+(?:[^/*][^*]*\*+)*/", logos::skip)]
-    CommonComent,
+    CommonComment,
     #[token("@")]
     At,
     // Keywords
@@ -56,11 +56,14 @@ pub enum TokenKind {
     Extern,
     #[token("return")]
     Return,
-    #[token("null")]
-    Null,
     #[token("matches")]
     Matches,
-
+    #[token("interface")]
+    Interface,
+    #[token("extend")]
+    Extend,
+    #[token("where")]
+    Where,
     // Multi-char operators (must come before single-char)
     #[token("&&")]
     And,

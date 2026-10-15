@@ -1,34 +1,37 @@
-use std::ops::Deref;
-
-use common::{
-    Span,
-    pool::{DedupPoolId, PoolId},
-};
 use dashmap::mapref::one::{Ref, RefMut};
 use module_loader::FileId;
 
 use crate::{
-    DeclarationId, HIRError, HirComponentDeclaration, HirComponentExpression, HirExpression,
-    HirFunctionDeclaration, HirStatement, HirType, Result, SlynxHir, SymbolPointer, VariableId,
+    DeclarationId, DescriptorId, HirFunctionDeclaration, SlynxHir, SymbolPointer, VariableId,
     context::HirSymbol,
-    file::HirFile,
     helpers::HirViewer,
-    id::{AnyDeclarationId, AnyLocalDeclarationId},
+    term::{TermId, TermNode},
 };
 
 impl SlynxHir<'_> {
-    pub fn insert_expression(&self, expr: HirExpression) -> PoolId<HirExpression> {
-        self.expressions.insert(expr)
-    }
-    pub fn insert_statement(&self, stmt: HirStatement) -> PoolId<HirStatement> {
-        self.statements.insert(stmt)
-    }
-    pub fn insert_component_expression(
+    /// Returns a method that the given `ty` owns with the given `name`. The method MUST be provided by an extension.
+    pub fn get_extension_method(
         &self,
-        component: HirComponentExpression,
-    ) -> PoolId<HirComponentExpression> {
-        self.component_expressions.insert(component)
+        ty: TermId,
+        name: SymbolPointer,
+    ) -> Option<DeclarationId<HirFunctionDeclaration>> {
+        let extensions = self.types.methods.get_extensions_of(ty)?;
+        for extensionid in extensions.iter() {
+            let extension = self.get_extension(*extensionid);
+            if extension.target != ty {
+                continue;
+            }
+            if let Some(method) = extension
+                .methods
+                .iter()
+                .find(|(method_name, _)| *method_name == name)
+            {
+                return Some(method.1);
+            }
+        }
+        None
     }
+
     pub fn find_function_by_symbol(
         &self,
         symbol: HirSymbol,
@@ -39,7 +42,7 @@ impl SlynxHir<'_> {
     pub fn find_component_by_symbol(
         &self,
         symbol: HirSymbol,
-    ) -> Option<DeclarationId<HirComponentDeclaration>> {
+    ) -> Option<DeclarationId<crate::HirComponentDeclaration>> {
         self.symbols_registry.get_component(symbol)
     }
 
@@ -53,72 +56,33 @@ impl SlynxHir<'_> {
 
     pub fn get_variable_name(&self, id: VariableId) -> &str {
         let ptr = self
+            .store
             .variable_names
             .get(&id)
             .expect("Variable name should be registered during HIR construction");
         self.symbols_resolver.get_name(*ptr)
     }
 
-    pub fn get_file(&self, id: FileId) -> Ref<'_, FileId, HirFile> {
-        self.files
-            .get(&id)
-            .expect("A file with the given id should exist")
+    pub fn get_file(&self, id: FileId) -> Ref<'_, FileId, crate::file::HirFile> {
+        self.store.get_file(id)
     }
-    pub fn get_file_mut(&self, id: FileId) -> RefMut<'_, FileId, HirFile> {
-        self.files
-            .get_mut(&id)
-            .expect("A file with the given id should exist")
-    }
-    pub fn get_declaration_type(&self, id: AnyDeclarationId) -> DedupPoolId<HirType> {
-        let file = self.get_or_create_file(id.file_id);
-        match id.local_id {
-            AnyLocalDeclarationId::Alias(alias) => file.alias.get(alias).ty,
-            AnyLocalDeclarationId::Component(component) => file.components.get(component).ty,
-            AnyLocalDeclarationId::Function(func) => file.functions.get(func).ty,
-            AnyLocalDeclarationId::Object(obj) => file.objects.get(obj).ty,
-            AnyLocalDeclarationId::Static(statik) => file.statik.get(statik).ty,
-            AnyLocalDeclarationId::Style(style) => file.styles.get(style).ty,
-            AnyLocalDeclarationId::Enum(enun) => file.enums.get(enun).ty,
-        }
-    }
-
-    pub fn get_declaration_generics(&self, id: AnyDeclarationId) -> Vec<SymbolPointer> {
-        let file = self.get_or_create_file(id.file_id);
-        match id.local_id {
-            AnyLocalDeclarationId::Alias(alias) => &file.alias.get(alias).generics,
-            AnyLocalDeclarationId::Component(component) => &file.components.get(component).generics,
-            AnyLocalDeclarationId::Function(func) => &file.functions.get(func).generics,
-            AnyLocalDeclarationId::Object(obj) => &file.objects.get(obj).generics,
-            AnyLocalDeclarationId::Style(style) => &file.styles.get(style).generics,
-            AnyLocalDeclarationId::Enum(enun) => &file.enums.get(enun).generics,
-            AnyLocalDeclarationId::Static(_) => {
-                unreachable!("An static should not contain generics")
-            }
-        }
-        .to_vec()
-    }
-
-    pub fn type_of_intrinsic(&self, name: &str, span: Span) -> Result<DedupPoolId<HirType>> {
-        let id = self.lang_items.get(name).map_err(|_| {
-            let sym = self.intern_name(name);
-            HIRError::intrinsic_not_registered(sym, span)
-        })?;
-        Ok(self.get_declaration_type(id))
+    pub fn get_file_mut(&self, id: FileId) -> RefMut<'_, FileId, crate::file::HirFile> {
+        self.store.get_file_mut(id)
     }
 
     /// Recursively flattens a HIR type to its primitive components.
     /// A struct `Color { inner: int }` flattens to `[int]`.
     /// A struct `Border { color: Color, width: int, radius: int }` flattens to `[int, int, int]`.
-    pub fn flatten_type(&self, ty: DedupPoolId<HirType>) -> Vec<DedupPoolId<HirType>> {
-        match &self.deref()[ty] {
-            HirType::Int | HirType::Float | HirType::Bool | HirType::Str => vec![ty],
-            HirType::Struct(strukt) => self
+    pub fn flatten_type(&self, ty: TermId) -> Vec<TermId> {
+        match &self.types[ty].node() {
+            TermNode::Primitive(_) => vec![ty],
+            TermNode::Data(DescriptorId::Struct(strukt)) => self
                 .view(*strukt)
-                .field_types()
+                .fields()
                 .iter()
-                .flat_map(|f| self.flatten_type(*f))
+                .flat_map(|f| self.flatten_type(f.ty))
                 .collect(),
-            HirType::Reference { rf, .. } => self.flatten_type(*rf),
+            TermNode::Apply { target, .. } => self.flatten_type(*target),
             _ => vec![ty],
         }
     }

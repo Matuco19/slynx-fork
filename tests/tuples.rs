@@ -42,6 +42,12 @@ fn test_tuple_type_annotation() {
     );
 }
 
+/// Elements without a separating comma must not parse as a tuple
+#[test]
+fn test_tuple_literal_with_missing_comma_is_rejected() {
+    common::compile_source_err_contains("func main(): void { let t = (1, 2 3); }", "','");
+}
+
 /// The empty tuple exposes 0 fields, so any positional access is a type error
 #[test]
 fn test_empty_tuple_access_is_rejected() {

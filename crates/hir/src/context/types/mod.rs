@@ -305,8 +305,13 @@ impl TypesContext {
     }
 
     ///Retrieves the type of something by asserting the provided `ref_ty` is a reference type to it
-    pub fn get_type_from_ref(&self, ref_ty: TermId, span: &common::Span) -> Result<TermId> {
-        self.storage.get_type_from_ref(ref_ty, span)
+    pub fn get_type_from_ref(
+        &self,
+        ref_ty: TermId,
+        span: &common::Span,
+        file: module_loader::FileId,
+    ) -> Result<TermId> {
+        self.storage.get_type_from_ref(ref_ty, span, file)
     }
 
     pub fn is_cyclic(&self, ty: TermId) -> bool {

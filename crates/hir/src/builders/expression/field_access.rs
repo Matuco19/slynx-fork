@@ -176,6 +176,7 @@ impl ExpressionBuilder {
             _ if dereferenced_type.is_struct().is_some() => {
                 //is struct but could not find any field
                 Err(HIRError::property_unrecognized(
+                    self.file(),
                     dereferenced_type.data,
                     vec![field_name],
                     span,
@@ -221,6 +222,7 @@ impl ExpressionBuilder {
             _ if dereferenced_type.is_component().is_some() => {
                 //is component but could not find any property
                 Err(HIRError::property_unrecognized(
+                    self.file(),
                     dereferenced_type.data,
                     vec![field_name],
                     span,
@@ -231,6 +233,7 @@ impl ExpressionBuilder {
             {
                 let Some(position) = view.fields().iter().position(|f| f.name == field_name) else {
                     return Err(HIRError::property_unrecognized(
+                        self.file(),
                         dereferenced_type.data,
                         vec![field_name],
                         span,
@@ -262,7 +265,7 @@ impl ExpressionBuilder {
             }
             _ => {
                 let ty = dereferenced_type.data;
-                Err(HIRError::not_a_struct(ty, span))
+                Err(HIRError::not_a_struct(self.file(), ty, span))
             }
         }
     }

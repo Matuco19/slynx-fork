@@ -200,6 +200,24 @@ impl ExpressionBuilder {
                     },
                 })
             }
+            _ if let Some(view) = dereferenced_type.is_component()
+                && let Some(position) = view
+                    .children()
+                    .iter()
+                    .position(|c| matches!(c.name, Some(name) if name == field_name)) =>
+            {
+                let child_ty = view.children()[position].ty;
+                Ok(HirExpression {
+                    ty: Owned {
+                        owner: parent_ty.owner,
+                        term: child_ty,
+                    },
+                    kind: HirExpressionKind::ChildAccess {
+                        expr: parent,
+                        child_index: position,
+                    },
+                })
+            }
             _ if dereferenced_type.is_component().is_some() => {
                 //is component but could not find any property
                 Err(HIRError::property_unrecognized(

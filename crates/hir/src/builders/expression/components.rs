@@ -81,7 +81,6 @@ impl ExpressionBuilder {
         let mut children = Vec::new();
         for value in &component.values {
             match value {
-                ComponentMemberValue::NamedChild { name, child } => {}
                 ComponentMemberValue::Assign { prop_name, rhs }
                     if let Some(position) = comp_view
                         .props()
@@ -117,6 +116,23 @@ impl ExpressionBuilder {
                         },
                     )?;
                     children.push(child_expr);
+                }
+                ComponentMemberValue::NamedChild { name, child } => {
+                    if let Some(position) = comp_view
+                        .children()
+                        .iter()
+                        .position(|child| matches!(child.name, Some(cname) if cname == *name))
+                    {
+                        let child_expr = self.build_component_expression(
+                            queue,
+                            ComponentExpressionDescriptor {
+                                component: child,
+                                span,
+                                context,
+                            },
+                        )?;
+                        children.push(child_expr);
+                    }
                 }
             }
         }

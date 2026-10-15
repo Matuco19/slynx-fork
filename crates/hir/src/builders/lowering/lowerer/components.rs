@@ -31,32 +31,23 @@ impl<'a> ASTLowerer<'a> {
                         let ty = self
                             .lower_type(queue, requester, c.data.name, &context)?
                             .term;
-                        let ty_view = queue.hir.view(ty);
-                        let view = ty_view.dereference();
-                        if let Some(view) = view.nominal().is_component() {
+                        if let Some(_) = queue.hir.view(ty).nominal().is_component() {
                             components.push(ComponentChild {
                                 name: Some(*name),
-                                child: view.data,
+                                ty,
                             });
                         } else {
-                            let name = queue.type_name(c.data.name.data);
-                            return Err(HIRError::not_a_component(name, c.span));
+                            return Err(HIRError::not_a_component(ty, c.span));
                         };
                     }
                     ComponentMemberKind::Child(c) => {
                         let ty = self
                             .lower_type(queue, requester, c.data.name, &context)?
                             .term;
-                        let ty_view = queue.hir.view(ty);
-                        let view = ty_view.dereference();
-                        if let Some(view) = view.nominal().is_component() {
-                            components.push(ComponentChild {
-                                name: None,
-                                child: view.data,
-                            });
+                        if let Some(_) = queue.hir.view(ty).nominal().is_component() {
+                            components.push(ComponentChild { name: None, ty });
                         } else {
-                            let name = queue.type_name(c.data.name.data);
-                            return Err(HIRError::not_a_component(name, c.span));
+                            return Err(HIRError::not_a_component(ty, c.span));
                         };
                     }
                 }

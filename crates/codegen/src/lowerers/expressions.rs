@@ -385,7 +385,11 @@ impl<'a> LoweringState<'a> {
             HirExpressionKind::Component(c) => self.get_component_expression(*c, context)?,
             HirExpressionKind::ChildAccess { expr, child_index } => {
                 let parent = self.lower_expression(*expr, context)?;
-                let ty = context.value_type(parent);
+                let ty = self.types.get_or_create_ir_type(
+                    expression.ty.term,
+                    expr.span,
+                    context.ir(),
+                )?;
                 context.emit(Opcode::GetChild(*child_index as u16), smallvec![parent], ty)
             }
             HirExpressionKind::If {

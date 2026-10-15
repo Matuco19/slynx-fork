@@ -94,6 +94,8 @@ impl Parser<'_> {
             vec.push(self.parse_expression(type_params, flags)?);
             if self.peek()?.kind == TokenKind::Comma {
                 self.eat()?;
+            } else if self.peek()?.kind != TokenKind::RParen {
+                return self.unexpected("Was expecting a ',' or 'RParen'");
             }
         }
         let end = self.expect(&TokenKind::RParen)?.span;

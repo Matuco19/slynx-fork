@@ -113,7 +113,7 @@ pub enum HIRErrorKind {
     InvalidIndexing(TermId),
     ///Couldnt infer is an error when the type of something could not be inferred
     CouldntInfer,
-    NotAComponent(SymbolPointer),
+    NotAComponent(TermId),
     ComponentPropertyMissingType,
     ComponentNotFound(SymbolPointer),
 
@@ -445,7 +445,7 @@ impl HIRError {
         Self::new(HIRErrorKind::InvalidFieldAccessTarget { ty }, span)
     }
     /// Creates a [`HIRErrorKind::InvalidFieldAccessTarget`] for accessing a non-struct type as a struct.
-    pub fn not_a_component(name: SymbolPointer, span: Span) -> Self {
+    pub fn not_a_component(name: TermId, span: Span) -> Self {
         Self::new(HIRErrorKind::NotAComponent(name), span)
     }
     /// Creates a [`HIRErrorKind::InvalidTupleAccessTarget`] for accessing a non-tuple type as a tuple.

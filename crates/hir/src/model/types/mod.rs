@@ -197,11 +197,12 @@ pub struct EnumType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComponentChild {
     pub name: Option<SymbolPointer>,
-    pub child: DedupPoolId<ComponentType>,
+    ///The type of the child. Its an termid because it can be a generic instantiation for example
+    pub ty: TermId,
 }
 impl Hash for ComponentChild {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.child.hash(state);
+        self.ty.hash(state);
     }
 }
 

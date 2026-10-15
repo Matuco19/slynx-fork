@@ -214,7 +214,7 @@ impl Parser<'_> {
                     current.span,
                 )),
                 TokenKind::LParen => {
-                    // The empty tuple `()` has no first expression to parse 
+                    // The empty tuple `()` has no first expression to parse
                     if self.peek()?.kind == TokenKind::RParen {
                         let end = self.expect(&TokenKind::RParen)?.span;
                         let span = current.span.merge_with(end);

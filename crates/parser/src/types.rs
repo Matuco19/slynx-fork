@@ -180,8 +180,7 @@ impl Parser<'_> {
             }
             TokenKind::LParen if self.peek_at(1)?.kind == TokenKind::RParen => {
                 self.expect(&TokenKind::LParen)?;
-                self.expect(&TokenKind::RBrace)?;
-                let end_span = self.eat()?.span;
+                let end_span = self.expect(&TokenKind::RParen)?.span;
                 let id = self.intern_type(Type::Plain(GenericIdentifier {
                     identifier: self.intern("()"),
                     generic: smallvec![],

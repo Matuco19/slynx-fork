@@ -52,6 +52,29 @@ impl<'a> ASTLowerer<'a> {
                     .create_type(Term::new_variable_type(target as u8, generic.identifier)),
             });
         }
+        // Tuple types are anonymous (`(T1, T2)` or `()`), so they have no declaration to look up;lower their fields directly
+        if generic.identifier == queue.hir.intern_name("()") {
+            let fields = generic
+                .generic
+                .iter()
+                .map(|arg| {
+                    self.lower_ast_type(
+                        queue,
+                        TypeLoweringDescriptor {
+                            requester,
+                            ty: span.make_spanned(arg.data),
+                            context,
+                            self_substitute,
+                        },
+                    )
+                    .map(|owned| owned.term)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            return Ok(Owned {
+                owner: requester,
+                term: queue.hir.types.create_tuple_type(fields),
+            });
+        }
         let ast_type = self
             .lookup
             .find_type(requester, generic.identifier)

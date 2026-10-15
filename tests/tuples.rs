@@ -41,3 +41,16 @@ fn test_tuple_type_annotation() {
         "func pair(): (int, str) { (1, \"ok\") } func main(): void { pair(); }",
     );
 }
+
+/// The empty tuple exposes 0 fields, so any positional access is a type error
+#[test]
+fn test_empty_tuple_access_is_rejected() {
+    let err = common::compile_source_err_contains(
+        "func main(): int { let unit = (); unit.0 }",
+        "Tuple index",
+    );
+    assert!(
+        err.contains("out of bounds"),
+        "expected out-of-bounds, got: {err}"
+    );
+}

@@ -21,3 +21,23 @@ fn test_tuple_two_objects() {
 fn test_tuple_nested_object() {
     common::compile_ok_sir("examples/tupleNestedObject.syx");
 }
+
+/// Regression for #167: the empty tuple `()` is the unit type and literal
+#[test]
+fn test_empty_tuple_type_and_literal() {
+    common::compile_source_ok("func g(): () { () } func main(): void { g(); }");
+}
+
+/// Regression for #167: `()` is valid as a parameter type and call argument
+#[test]
+fn test_empty_tuple_as_parameter() {
+    common::compile_source_ok("func f(x: ()): void { () } func main(): void { f(()); }");
+}
+
+/// Tuple annotations lower to tuple types instead of a missing named type
+#[test]
+fn test_tuple_type_annotation() {
+    common::compile_source_ok(
+        "func pair(): (int, str) { (1, \"ok\") } func main(): void { pair(); }",
+    );
+}

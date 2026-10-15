@@ -169,6 +169,17 @@ impl ComponentBuilder {
                     });
                     prop_index += 1;
                 }
+                ComponentMemberKind::NamedChild { child, .. } => {
+                    let expr = self.builder.build_component_expression(
+                        queue,
+                        ComponentExpressionDescriptor {
+                            component: &child.data,
+                            span: child.span,
+                            context: &context,
+                        },
+                    )?;
+                    decls.push(ComponentMemberDeclaration::Child(expr));
+                }
                 ComponentMemberKind::Child(c) => {
                     let expr = self.builder.build_component_expression(
                         queue,

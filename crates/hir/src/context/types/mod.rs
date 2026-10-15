@@ -11,8 +11,9 @@ use dashmap::{DashMap, DashSet};
 use module_loader::FileId;
 
 use crate::{
-    ComponentType, DeclarationId, EnumType, EnumVariantType, HirFunctionDeclaration, InterfaceType,
-    Result, StructField, StructType, SymbolPointer, TupleType, VariableId,
+    ComponentChild, ComponentType, DeclarationId, EnumType, EnumVariantType,
+    HirFunctionDeclaration, InterfaceType, Result, StructField, StructType, SymbolPointer,
+    TupleType, VariableId,
     helpers::Visible,
     interface::InterfaceTerm,
     term::{ExtensionNode, Term, TermId, TermNode},
@@ -145,7 +146,7 @@ impl TypesContext {
         name: SymbolPointer,
         owner: FileId,
         properties: Vec<(SymbolPointer, TermId)>,
-        children: Vec<DedupPoolId<ComponentType>>,
+        children: Vec<ComponentChild>,
     ) -> TermId {
         let comp_ty = self
             .storage

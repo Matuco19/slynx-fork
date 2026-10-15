@@ -81,6 +81,7 @@ impl ExpressionBuilder {
         let mut children = Vec::new();
         for value in &component.values {
             match value {
+                ComponentMemberValue::NamedChild { name, child } => {}
                 ComponentMemberValue::Assign { prop_name, rhs }
                     if let Some(position) = comp_view
                         .props()

@@ -19,7 +19,10 @@ pub struct ColumnRange(u64);
 impl ColumnRange {
     pub fn new(start: usize, end: usize) -> Self {
         let start = start as u64;
-        let end = end as u64;
+        // A range never ends before it starts. Clamping keeps a position whose
+        // end lands past the reported line (which happens when a span points at
+        // the very end of a file) from underflowing the difference below.
+        let end = (end as u64).max(start);
         let dif = end - start;
         Self(start << 32 | dif & 0xffffffff)
     }

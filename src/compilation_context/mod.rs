@@ -340,14 +340,15 @@ impl SlynxContext {
         &self,
         ast: &'a Modules,
     ) -> Result<(SlynxHir<'a>, HashSet<AnyDeclarationId>, OwnershipAnalysis), SlynxError> {
-        let mut hir = SlynxHir::new(ast).map_err(|e| self.handle_hir_error(&e.0, e.1))?;
+        let mut hir = SlynxHir::new(ast).map_err(|e| self.handle_hir_error(ast, &e.0, e.1))?;
 
-        let deadcode = self.monomorphize(&mut hir)?;
+        let deadcode = self.monomorphize(ast, &mut hir)?;
 
         // Run ownership analysis (move semantics + borrow checking)
         let ownership = OwnershipAnalysis::analyze(&hir);
         if !ownership.errors.is_empty() {
             return Err(self.handle_ownership_error(
+                ast,
                 &hir,
                 &ownership.errors[0],
                 ownership.errors[0].backtrace.clone(),
@@ -360,14 +361,16 @@ impl SlynxContext {
     ///Monomorphization only changes(by now) the types module.
     pub fn monomorphize(
         &self,
+        modules: &Modules,
         hir: &mut SlynxHir,
     ) -> Result<HashSet<AnyDeclarationId>, SlynxError> {
-        Monomorphizer::resolve(hir).map_err(|e| self.handle_hir_error(hir, e))
+        Monomorphizer::resolve(hir).map_err(|e| self.handle_hir_error(modules, hir, e))
     }
 
     ///Builds a new IR from the given `hir`. It's assumed that it is already implemented
     pub fn build_ir(
         &self,
+        modules: &Modules,
         hir: SlynxHir,
         deadcode: HashSet<AnyDeclarationId>,
         ownership: OwnershipAnalysis,
@@ -375,7 +378,7 @@ impl SlynxContext {
         let codegen = LoweringState::new(&hir);
         codegen
             .generate(deadcode, ownership)
-            .map_err(|e| self.build_ir_generation_error(e, &hir))
+            .map_err(|e| self.build_ir_generation_error(modules, e, &hir))
     }
 
     ///Builds typed HIR and IR once so callers can inspect or persist intermediate dumps
@@ -383,7 +386,7 @@ impl SlynxContext {
     pub fn build_stages(self) -> Result<CompilationStages, SlynxError> {
         let modules = self.load_modules()?;
         let (hir, deadcode, ownership) = self.build_hir(&modules)?;
-        let ir = self.build_ir(hir, deadcode, ownership)?;
+        let ir = self.build_ir(&modules, hir, deadcode, ownership)?;
 
         Ok(CompilationStages::new(self.entry_point.as_ref(), ir))
     }

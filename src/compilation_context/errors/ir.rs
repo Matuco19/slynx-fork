@@ -1,8 +1,9 @@
+use module_loader::Modules;
 use slynx_codegen::{CodegenError, CodegenErrorKind};
 use slynx_hir::{SlynxHir, id::AnyLocalDeclarationId};
 
 use crate::{
-    ErrorPosition, SlynxContext,
+    SlynxContext,
     compilation_context::errors::{SlynxError, helpers::suggestions_from_ir},
 };
 
@@ -68,18 +69,23 @@ pub fn format_ir_generation_error(error: &CodegenError, hir: &SlynxHir) -> Strin
     }
 }
 impl SlynxContext {
-    pub fn build_ir_generation_error(&self, error: CodegenError, hir: &SlynxHir) -> SlynxError {
-        let info = self.get_line_info(&self.entry_point, error.span.start as usize);
+    pub fn build_ir_generation_error(
+        &self,
+        modules: &Modules,
+        error: CodegenError,
+        hir: &SlynxHir,
+    ) -> SlynxError {
+        let (position, src) = self.position_of(modules, error.file, error.span.start as usize);
+        let file = modules
+            .path_of(error.file)
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| self.file_name());
 
         SlynxError::new_compiler(
-            ErrorPosition {
-                line: info.line,
-                column: info.column_start,
-                end_column: info.column_end,
-            },
+            position,
             format_ir_generation_error(&error, hir),
-            self.file_name(),
-            info.src,
+            file,
+            src,
             suggestions_from_ir(&error),
             error.backtrace,
         )

@@ -50,12 +50,25 @@ impl Parser<'_> {
         let mut span = self.peek()?.span;
         let curr = self.peek()?;
         match curr.kind {
+            TokenKind::Identifier(_) if self.peek_at(1)?.kind == TokenKind::Eq => {
+                //checks for 'name='
+                let name = self.expect_identifier()?;
+                self.eat()?;
+                let expr = self.parse_component_expr(type_params, ParserFlags::empty())?;
+                Ok(ComponentMember {
+                    span: name.span.merge_with(expr.span),
+                    kind: ComponentMemberKind::NamedChild {
+                        name: name.data,
+                        child: expr,
+                    },
+                })
+            }
             TokenKind::Identifier(_) => {
                 let span = curr.span;
                 let expr = self.parse_component_expr(type_params, ParserFlags::empty())?;
                 Ok(ComponentMember {
+                    span: span.merge_with(expr.span),
                     kind: ComponentMemberKind::Child(expr),
-                    span,
                 })
             }
             TokenKind::Prop => {

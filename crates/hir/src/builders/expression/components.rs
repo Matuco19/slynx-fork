@@ -44,7 +44,7 @@ impl ExpressionBuilder {
         let ty = lowered.term;
         let ty_view = queue.hir.view(lowered.term);
         let Some(comp_view) = ty_view.nominal().is_component() else {
-            return Err(HIRError::not_a_component(lowered.term, span));
+            return Err(HIRError::not_a_component(self.file(), lowered.term, span));
         };
         let concrete_name = queue.hir.types.get_component_name(comp_view.data);
         let concrete_owner = queue.hir.types.get_component_owner(comp_view.data);
@@ -67,7 +67,7 @@ impl ExpressionBuilder {
                 let comp = queue.modules.get_entry(owner).component().get(comp);
                 queue.enqueue_component(comp, owner)?;
             } else {
-                return Err(HIRError::component_not_found(name, span));
+                return Err(HIRError::component_not_found(self.file(), name, span));
             }
         }
 
@@ -103,7 +103,12 @@ impl ExpressionBuilder {
                 }
                 ComponentMemberValue::Assign { prop_name, .. } => {
                     // couldnt find any member with name `prop_name`
-                    return Err(HIRError::property_unrecognized(ty, vec![*prop_name], span));
+                    return Err(HIRError::property_unrecognized(
+                        self.file(),
+                        ty,
+                        vec![*prop_name],
+                        span,
+                    ));
                 }
                 ComponentMemberValue::Child(child) => {
                     let child_expr = self.build_component_expression(

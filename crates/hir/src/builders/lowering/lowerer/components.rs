@@ -24,7 +24,10 @@ impl<'a> ASTLowerer<'a> {
                             let field = self.lower_type(queue, requester, *ty, &context)?.term;
                             properties.push((*name, field));
                         } else {
-                            return Err(HIRError::component_missing_prop_type(member.span));
+                            return Err(HIRError::component_missing_prop_type(
+                                requester,
+                                member.span,
+                            ));
                         }
                     }
                     ComponentMemberKind::NamedChild { name, child: c } => {
@@ -37,7 +40,7 @@ impl<'a> ASTLowerer<'a> {
                                 ty,
                             });
                         } else {
-                            return Err(HIRError::not_a_component(ty, c.span));
+                            return Err(HIRError::not_a_component(requester, ty, c.span));
                         };
                     }
                     ComponentMemberKind::Child(c) => {
@@ -47,7 +50,7 @@ impl<'a> ASTLowerer<'a> {
                         if let Some(_) = queue.hir.view(ty).nominal().is_component() {
                             components.push(ComponentChild { name: None, ty });
                         } else {
-                            return Err(HIRError::not_a_component(ty, c.span));
+                            return Err(HIRError::not_a_component(requester, ty, c.span));
                         };
                     }
                 }
@@ -77,6 +80,7 @@ impl<'a> ASTLowerer<'a> {
             let chain = node.pendings.signature_stack.borrow().clone();
             node.pendings.signature_stack.borrow_mut().pop();
             return Err(HIRError::cyclic_component_signature(
+                node.entry,
                 component.name,
                 chain,
                 component.span,

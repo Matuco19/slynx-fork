@@ -56,6 +56,7 @@ impl Monomorphizer {
         hir: &SlynxHir,
         ty: TermId,
         span: Span,
+        site: FileId,
     ) -> Result<TermId> {
         let ty_view = hir.view(ty);
         let TermNode::Apply { target, args } = ty_view.raw().node() else {
@@ -66,7 +67,7 @@ impl Monomorphizer {
         let (comp_id, comp_view) = if let Some(view) = deref.is_component() {
             (ty, view)
         } else {
-            return Err(HIRError::not_a_component(ty, span));
+            return Err(HIRError::not_a_component(site, ty, span));
         };
         let name = hir.intern_name(comp_view.name());
 
@@ -104,10 +105,14 @@ impl Monomorphizer {
                         mangled_symbol: SymbolPointer,
                         _: &MonomorphizationKey| {
                     let specialized_ty =
-                        monomorphizer.rebuild_component_type(hir, comp_id, subst, span)?;
+                        monomorphizer.rebuild_component_type(hir, comp_id, subst, span, owner)?;
 
-                    let new_members =
-                        monomorphizer.build_component_members(hir, &template_members, subst)?;
+                    let new_members = monomorphizer.build_component_members(
+                        hir,
+                        &template_members,
+                        subst,
+                        owner,
+                    )?;
 
                     let specialized_local = {
                         let file = hir.get_file_mut(owner);
@@ -128,6 +133,7 @@ impl Monomorphizer {
                     Ok(DeclarationId::new(owner, specialized_local))
                 },
             },
+            site,
         )?;
 
         let file = hir.get_file(specialized.owner);
@@ -186,11 +192,12 @@ impl Monomorphizer {
         comp_ty: TermId,
         subst: &Substitution,
         span: Span,
+        site: FileId,
     ) -> Result<TermId> {
         let view = hir.view(comp_ty);
         let name = hir.intern_name(&view.internal_name());
         let Some(component_view) = view.nominal().is_component() else {
-            return Err(HIRError::not_a_component(view.data(), span));
+            return Err(HIRError::not_a_component(site, view.data(), span));
         };
 
         let owner = hir.types.get_component_owner(component_view.data());
@@ -199,8 +206,12 @@ impl Monomorphizer {
             .props()
             .iter()
             .map(|prop| {
-                let new_ty =
-                    self.resolve_expression_type(hir, substitute_type(hir, prop.ty, subst)?, span)?;
+                let new_ty = self.resolve_expression_type(
+                    hir,
+                    substitute_type(hir, prop.ty, subst)?,
+                    span,
+                    site,
+                )?;
                 Ok((prop.name, new_ty))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -209,7 +220,7 @@ impl Monomorphizer {
             .children()
             .iter()
             .map(|child| {
-                let child_ty = self.rebuild_component_type(hir, child.ty, subst, span)?;
+                let child_ty = self.rebuild_component_type(hir, child.ty, subst, span, site)?;
                 let child_view = hir.view(child_ty);
                 if let TermNode::Data(descriptor) = child_view.raw().node()
                     && let DescriptorId::Component(_) = descriptor
@@ -243,6 +254,7 @@ impl Monomorphizer {
         hir: &SlynxHir,
         members: &[ComponentMemberDeclaration],
         subst: &Substitution,
+        site: FileId,
     ) -> Result<Vec<ComponentMemberDeclaration>> {
         members
             .iter()
@@ -255,7 +267,7 @@ impl Monomorphizer {
                     span,
                 } => {
                     let value = value
-                        .map(|expr| self.build_expression(hir, expr, subst))
+                        .map(|expr| self.build_expression(hir, expr, subst, site))
                         .transpose()?;
                     Ok(ComponentMemberDeclaration::Property {
                         name: *name,
@@ -266,7 +278,7 @@ impl Monomorphizer {
                     })
                 }
                 ComponentMemberDeclaration::Child(child) => {
-                    let child = self.build_component_expression(hir, *child, subst)?;
+                    let child = self.build_component_expression(hir, *child, subst, site)?;
                     Ok(ComponentMemberDeclaration::Child(child))
                 }
             })
@@ -294,7 +306,7 @@ impl Monomorphizer {
                 .clone()
         };
         let new_members =
-            self.build_component_members(hir, &template_members, &Substitution::empty())?;
+            self.build_component_members(hir, &template_members, &Substitution::empty(), owner)?;
         let mut file = hir.get_file_mut(owner);
         file.declarations
             .declarations

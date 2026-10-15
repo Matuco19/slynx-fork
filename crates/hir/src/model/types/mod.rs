@@ -48,6 +48,8 @@ pub mod term;
 #[cfg(test)]
 mod term_tests;
 pub mod vector;
+use std::hash::Hash;
+
 use crate::{SymbolPointer, Visible, term::TermId};
 
 use common::{VisibilityModifier, pool::DedupPoolId};
@@ -192,6 +194,17 @@ pub struct EnumType {
     pub variants: Vec<EnumVariantType>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComponentChild {
+    pub name: Option<SymbolPointer>,
+    pub child: DedupPoolId<ComponentType>,
+}
+impl Hash for ComponentChild {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.child.hash(state);
+    }
+}
+
 #[derive(Debug, Hash, Clone, PartialEq, Eq)]
 pub struct ComponentType {
     pub(crate) name: SymbolPointer,
@@ -204,7 +217,7 @@ pub struct ComponentType {
     /// shape.
     pub(crate) owner: FileId,
     pub(crate) properties: Vec<Visible<StructField>>,
-    pub(crate) children: Vec<DedupPoolId<ComponentType>>,
+    pub(crate) children: Vec<ComponentChild>,
 }
 
 #[derive(Debug, Hash, Clone, PartialEq, Eq)]

@@ -17,8 +17,8 @@ use common::{
 };
 use module_loader::FileId;
 use slynx_hir::{
-    ComponentMemberDeclaration, ComponentType, DeclarationId, DescriptorId, HIRError,
-    HirComponentDeclaration, Result, SlynxHir, SymbolPointer,
+    ComponentChild, ComponentMemberDeclaration, ComponentType, DeclarationId, DescriptorId,
+    HIRError, HirComponentDeclaration, Result, SlynxHir, SymbolPointer,
     term::{TermId, TermNode},
 };
 
@@ -62,19 +62,13 @@ impl Monomorphizer {
             unreachable!("resolve_component_target requires a Reference type")
         };
         let ty_view = hir.view(*target);
-        let deref = ty_view.dereference();
-        let comp_id = match deref.raw().node() {
-            TermNode::Data(DescriptorId::Component(c)) => *c,
-            _ => {
-                return Err(HIRError::generic_arity_mismatch(
-                    hir.intern_name("<non-component>"),
-                    0,
-                    args.iter().filter(|slot| !slot.is_null()).count(),
-                    span,
-                ));
-            }
+        let deref = ty_view.nominal();
+        let (comp_id, comp_view) = if let Some(view) = deref.is_component() {
+            (ty, view)
+        } else {
+            return Err(HIRError::not_a_component(ty, span));
         };
-        let name = hir.intern_name(hir.view(comp_id).name());
+        let name = hir.intern_name(comp_view.name());
 
         let Some(template) = self.find_declaration_by_name::<HirComponentDeclaration>(hir, name)
         else {
@@ -189,19 +183,19 @@ impl Monomorphizer {
     pub(crate) fn rebuild_component_type(
         &mut self,
         hir: &SlynxHir,
-        comp_ty: DedupPoolId<ComponentType>,
+        comp_ty: TermId,
         subst: &Substitution,
         span: Span,
     ) -> Result<TermId> {
         let view = hir.view(comp_ty);
-        let name = hir.intern_name(view.name());
-        // Read from the type, never from the caller. A component tree spans
-        // files: a child declared in an imported file keeps that file as its
-        // owner, so an owner threaded down from the root would stamp the wrong
-        // file on every descendant and let a private child leak.
-        let owner = hir.types.get_component_owner(comp_ty);
+        let name = hir.intern_name(&view.internal_name());
+        let Some(component_view) = view.nominal().is_component() else {
+            return Err(HIRError::not_a_component(view.data(), span));
+        };
 
-        let properties = view
+        let owner = hir.types.get_component_owner(component_view.data());
+
+        let properties = component_view
             .props()
             .iter()
             .map(|prop| {
@@ -211,16 +205,19 @@ impl Monomorphizer {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let children = view
+        let children = component_view
             .children()
             .iter()
             .map(|child| {
-                let child_ty = self.rebuild_component_type(hir, *child, subst, span)?;
+                let child_ty = self.rebuild_component_type(hir, child.ty, subst, span)?;
                 let child_view = hir.view(child_ty);
                 if let TermNode::Data(descriptor) = child_view.raw().node()
-                    && let DescriptorId::Component(child) = descriptor
+                    && let DescriptorId::Component(_) = descriptor
                 {
-                    Ok(*child)
+                    Ok(ComponentChild {
+                        ty: child_ty,
+                        name: child.name,
+                    })
                 } else {
                     unreachable!("rebuild_component_type must yield a component type")
                 }

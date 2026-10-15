@@ -533,8 +533,8 @@ impl Monomorphizer {
                     .collect::<Result<Vec<_>>>()?;
                 Ok(hir.types.create_tuple_type(fields))
             }
-            TermNode::Data(DescriptorId::Component(component)) => {
-                self.rebuild_component_type(hir, *component, &Substitution::empty(), span)
+            TermNode::Data(DescriptorId::Component(_)) => {
+                self.rebuild_component_type(hir, ty, &Substitution::empty(), span)
             }
             TermNode::Apply { target, args } => {
                 let new_rf = self.resolve_expression_type(hir, *target, span)?;
@@ -673,7 +673,7 @@ impl Monomorphizer {
         let node = &hir[expression.data];
         let mut call_ty = node.ty.term;
 
-        let kind = match node.kind.clone() {
+        let kind = match &node.kind {
             HirExpressionKind::Int(_)
             | HirExpressionKind::StringLiteral(_)
             | HirExpressionKind::Float(_)
@@ -681,13 +681,13 @@ impl Monomorphizer {
             | HirExpressionKind::False
             | HirExpressionKind::Static { .. } => node.kind.clone(),
             HirExpressionKind::Reference(inner) => {
-                HirExpressionKind::Reference(self.build_expression(hir, inner, subst)?)
+                HirExpressionKind::Reference(self.build_expression(hir, *inner, subst)?)
             }
             HirExpressionKind::Deref(inner) => {
-                HirExpressionKind::Deref(self.build_expression(hir, inner, subst)?)
+                HirExpressionKind::Deref(self.build_expression(hir, *inner, subst)?)
             }
             HirExpressionKind::Identifier(id) => {
-                if let Some(tracked) = self.lookup_variable_type(id) {
+                if let Some(tracked) = self.lookup_variable_type(*id) {
                     // No annotation: the identifier carries the initializer's
                     // original type, so use the concrete rebuilt type. With an
                     // annotation the identifier already carries the declared
@@ -710,8 +710,8 @@ impl Monomorphizer {
                 HirExpressionKind::Vector(self.build_expressions(hir, &items, subst)?)
             }
             HirExpressionKind::ArrayIndex(array, index) => {
-                let array = self.build_expression(hir, array, subst)?;
-                let index = self.build_expression(hir, index, subst)?;
+                let array = self.build_expression(hir, *array, subst)?;
+                let index = self.build_expression(hir, *index, subst)?;
                 let array_ty = hir[array.data].ty;
                 call_ty = hir
                     .view(array_ty.term)
@@ -723,12 +723,12 @@ impl Monomorphizer {
                 HirExpressionKind::ArrayIndex(array, index)
             }
             HirExpressionKind::Binary { lhs, op, rhs } => HirExpressionKind::Binary {
-                lhs: self.build_expression(hir, lhs, subst)?,
-                op,
-                rhs: self.build_expression(hir, rhs, subst)?,
+                lhs: self.build_expression(hir, *lhs, subst)?,
+                op: *op,
+                rhs: self.build_expression(hir, *rhs, subst)?,
             },
             HirExpressionKind::Object { name, fields } => {
-                let substituted_name = substitute_type(hir, name, subst)?;
+                let substituted_name = substitute_type(hir, *name, subst)?;
                 let ty_view = hir.view(substituted_name);
                 let deref = ty_view.nominal();
                 let new_name = if is_resolvable_reference(hir, substituted_name)
@@ -749,24 +749,40 @@ impl Monomorphizer {
                 field_index,
                 field_name,
             } => {
-                let expr = self.build_expression(hir, expr, subst)?;
+                let expr = self.build_expression(hir, *expr, subst)?;
                 let parent_ty = hir[expr.data].ty;
                 call_ty = match hir.view(parent_ty.term).dereference().is_struct() {
                     Some(struct_view) => struct_view
                         .fields()
-                        .get(field_index)
+                        .get(*field_index)
                         .map(|field| field.ty)
                         .unwrap_or(node.ty.term),
                     None => node.ty.term,
                 };
                 HirExpressionKind::FieldAccess {
                     expr,
-                    field_index,
-                    field_name,
+                    field_index: *field_index,
+                    field_name: *field_name,
+                }
+            }
+            HirExpressionKind::ChildAccess { expr, child_index } => {
+                let expr = self.build_expression(hir, *expr, subst)?;
+                let parent_ty = hir[expr.data].ty;
+                call_ty = match hir.view(parent_ty.term).dereference().is_component() {
+                    Some(component_view) => component_view
+                        .children()
+                        .get(*child_index)
+                        .map(|field| field.ty)
+                        .unwrap_or(node.ty.term),
+                    None => node.ty.term,
+                };
+                HirExpressionKind::ChildAccess {
+                    expr,
+                    child_index: *child_index,
                 }
             }
             HirExpressionKind::Component(component) => {
-                let new_component = self.build_component_expression(hir, component, subst)?;
+                let new_component = self.build_component_expression(hir, *component, subst)?;
                 call_ty = hir[new_component.data].name;
                 HirExpressionKind::Component(new_component)
             }
@@ -775,15 +791,16 @@ impl Monomorphizer {
                 then_branch,
                 else_branch,
             } => HirExpressionKind::If {
-                condition: self.build_expression(hir, condition, subst)?,
+                condition: self.build_expression(hir, *condition, subst)?,
                 then_branch: self.build_statements(hir, &then_branch, subst)?,
                 else_branch: else_branch
+                    .clone()
                     .map(|branch| self.build_statements(hir, &branch, subst))
                     .transpose()?,
             },
             HirExpressionKind::Enum { ty, variant, args } => HirExpressionKind::Enum {
-                ty: substitute_type(hir, ty, subst)?,
-                variant,
+                ty: substitute_type(hir, *ty, subst)?,
+                variant: *variant,
                 args: self.build_expressions(hir, &args, subst)?,
             },
             HirExpressionKind::Matches {
@@ -791,8 +808,8 @@ impl Monomorphizer {
                 variant,
                 args,
             } => HirExpressionKind::Matches {
-                value: self.build_expression(hir, value, subst)?,
-                variant,
+                value: self.build_expression(hir, *value, subst)?,
+                variant: *variant,
                 args: self.build_expressions(hir, &args, subst)?,
             },
             HirExpressionKind::FunctionCall {
@@ -805,7 +822,7 @@ impl Monomorphizer {
                     .map(|generic| substitute_type(hir, *generic, subst))
                     .collect::<Result<Vec<_>>>()?;
 
-                let new_name = if let Some(signature) = hir.types.interface_signature(name) {
+                let new_name = if let Some(signature) = hir.types.interface_signature(*name) {
                     // A deferred interface call: the target was the interface
                     // method's signature declaration because the receiver was a
                     // generic parameter. Now that its concrete type is known,
@@ -828,10 +845,10 @@ impl Monomorphizer {
                     call_ty = self.function_return_type(hir, target)?;
                     target
                 } else if new_generics.is_empty() {
-                    name
+                    *name
                 } else {
                     let target =
-                        self.resolve_function_target(hir, name, new_generics, expression.span)?;
+                        self.resolve_function_target(hir, *name, new_generics, expression.span)?;
                     call_ty = self.function_return_type(hir, target)?;
                     target
                 };

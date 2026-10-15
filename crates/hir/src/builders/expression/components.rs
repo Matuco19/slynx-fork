@@ -43,10 +43,9 @@ impl ExpressionBuilder {
         };
         let ty = lowered.term;
         let ty_view = queue.hir.view(lowered.term);
-        let comp_view = ty_view
-            .nominal()
-            .is_component()
-            .expect("find_type returned non-component type for component name");
+        let Some(comp_view) = ty_view.nominal().is_component() else {
+            return Err(HIRError::not_a_component(lowered.term, span));
+        };
         let concrete_name = queue.hir.types.get_component_name(comp_view.data);
         let concrete_owner = queue.hir.types.get_component_owner(comp_view.data);
         if queue

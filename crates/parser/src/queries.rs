@@ -117,9 +117,8 @@ impl<'a> Parser<'a> {
 
     ///Parses a list of `item`s separated by `sep` and ending at `term`, which
     ///is left unconsumed. When `allow_trailing` is set, a separator directly
-    ///before the terminator (i.e. a trailing comma) is accepted. On every other
-    ///token after an item the list stops, so malformed input is rejected either
-    ///here or by the caller expecting the `term`inator.
+    ///before the terminator (i.e. a trailing comma) is accepted. Any other
+    ///token after an item is an error.
     pub fn parse_separated<T>(
         &mut self,
         term: TokenKind,
@@ -143,9 +142,8 @@ impl<'a> Parser<'a> {
                     after_separator = true;
                 }
                 ref kind if kind == &term => break,
-                _ if allow_trailing => after_separator = false,
                 _ => {
-                    return self.unexpected(format!("Was expecting a ',' or '{term:?}'"));
+                    return self.unexpected(format!("a ',' or '{term:?}'"));
                 }
             }
         }

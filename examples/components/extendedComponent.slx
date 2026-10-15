@@ -1,5 +1,5 @@
 interface Stringifiable {
-    func stringify(&self) -> str
+    func stringify(&self): str;
 }
 
 component Counter {
@@ -7,7 +7,7 @@ component Counter {
 }
 
 extend Counter: Stringifiable {
-    func stringify(&self) -> str -> "counter";
+    func stringify(&self): str -> "counter";
 }
 
 func describe<T>(x: T): str where T: Stringifiable -> x.stringify();

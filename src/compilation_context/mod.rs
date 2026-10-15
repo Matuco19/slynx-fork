@@ -257,13 +257,6 @@ impl SlynxContext {
             .unwrap_or(source.len())
     }
 
-    fn entry_point_eof_index(&self) -> usize {
-        self.get_entry_point_source()
-            .chars()
-            .count()
-            .saturating_sub(1)
-    }
-
     ///Based on the provided `index`, which is the index of a char on the source code of `path`, returns the line where it's located on the file of the provided `path`.
     ///This will return its line and the column and the line containing the error
     pub fn get_line_info(&self, path: &Arc<PathBuf>, index: usize) -> LineInfo {

@@ -30,10 +30,12 @@ Both are skipped by the lexer.
 <hex_lit>    ::= "0x" <hex_digits>
 <octal_lit>  ::= "0o" <octal_digits>
 <decimal_int_lit> ::= <number> { <number> | "_" }
-<float_lit> ::= <number> { <number> | "_" } "." <number> { <number> | "_" }
+<float_lit> ::= <number> { <number> | "_" } "." <number> { <number> | "_" } [<exponent>]
+              | <number> { <number> | "_" } <exponent>
+<exponent> ::= ("e" | "E") ["+" | "-"] <decimal_int_lit>
 ```
 
-- `_` may appear as a digit separator inside numeric literals.
+- `_` may appear as a digit separator inside numeric literals, only between two digits.
 - Integer literals parse as `i32`, float literals as `f32`.
 
 ### String Literals

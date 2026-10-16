@@ -59,8 +59,16 @@ impl ExpressionBuilder {
 
         let concrete = match ty_view.raw().node() {
             TermNode::Apply { .. } => ty.term,
+            // A bare `WrapperFor(...)` with no explicit type arguments has no
+            // `Apply` node of its own, so its arguments have to come from the
+            // expected type. Both sides must be compared at their *nominal* type:
+            // `dereference` keeps `Apply` nodes (that is what preserves a
+            // specialization's identity), so comparing it against `nominal()`
+            // never matched and the arguments were silently dropped, leaving
+            // `generics` empty and panicking later while substituting a field
+            // that still mentions the type parameter.
             _ if let Some(expected) = expected
-                && queue.hir.view(expected).dereference().data() == deref.data()
+                && queue.hir.view(expected).nominal().data() == deref.data()
                 && let TermNode::Apply { .. } = queue.hir.view(expected).raw().node() =>
             {
                 expected

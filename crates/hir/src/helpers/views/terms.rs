@@ -23,7 +23,41 @@ impl<'a> HirViewer<'a, TermId> {
     pub fn children(&self) -> Vec<TermId> {
         self.raw().children()
     }
-
+    fn render_apply_internal(self, target: TermId, args: &[TermId]) -> String {
+        match self.new_with(target).is_extension() {
+            Some(ext) if ext.dyn_eq(&ArrayTerm) => {
+                let elem = args
+                    .first()
+                    .map(|elem| self.new_with(*elem).pretty_name())
+                    .unwrap_or_default();
+                let len = args
+                    .get(1)
+                    .and_then(|len| self.constant_usize(*len))
+                    .unwrap_or_default();
+                format!("Array_{len}_{elem}")
+            }
+            Some(ext) if ext.dyn_eq(&VectorTerm) => {
+                let elem = args
+                    .first()
+                    .map(|elem| self.new_with(*elem).pretty_name())
+                    .unwrap_or_default();
+                format!("Vector_{elem}")
+            }
+            _ => {
+                let base = self.new_with(target).pretty_name();
+                let generics = args
+                    .iter()
+                    .map(|arg| self.new_with(*arg).pretty_name())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                if generics.is_empty() {
+                    base
+                } else {
+                    format!("{base}_apply_{generics}")
+                }
+            }
+        }
+    }
     pub fn internal_name(&self) -> String {
         match self.dereference().raw().node() {
             TermNode::Primitive(pt) => pt.to_string(),
@@ -53,7 +87,7 @@ impl<'a> HirViewer<'a, TermId> {
                     .iter()
                     .map(|field| self.new_with(*field).internal_name())
                     .collect::<Vec<_>>()
-                    .join("@");
+                    .join("_");
                 format!("Tuple_{fields}")
             }
             TermNode::Ref {
@@ -64,7 +98,7 @@ impl<'a> HirViewer<'a, TermId> {
                 mutable: true,
                 target,
             } => format!("MRef_{}", self.new_with(*target).internal_name()),
-            TermNode::Apply { target, args } => self.render_apply(*target, args),
+            TermNode::Apply { target, args } => self.render_apply_internal(*target, args),
             TermNode::Extension(ext) => ext.name().to_string(),
             TermNode::Constant(constant) => format!("Constant_{constant:?}"),
             TermNode::Hole(_) => "Hole".to_string(),

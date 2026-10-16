@@ -135,14 +135,17 @@ pub enum TokenKind {
     Question,
 
     // Literals
-    #[regex(r"0x[0-9a-fA-F]+", |lex| i32::from_str_radix(&lex.slice()[2..], 16).ok())]
-    #[regex(r"0b[01]+", |lex| i32::from_str_radix(&lex.slice()[2..], 2).ok())]
-    #[regex(r"0o[0-7]+", |lex| i32::from_str_radix(&lex.slice()[2..], 8).ok())]
-    #[regex(r"[0-9][0-9_]*", |lex| lex.slice().replace('_', "").parse::<i32>().ok())]
+    // Underscores are only allowed between digits (`_[digit]`)
+    #[regex(r"0x[0-9a-fA-F]([0-9a-fA-F]|_[0-9a-fA-F])*", |lex| i32::from_str_radix(&lex.slice()[2..].replace('_', ""), 16).ok())]
+    #[regex(r"0b[01]([01]|_[01])*", |lex| i32::from_str_radix(&lex.slice()[2..].replace('_', ""), 2).ok())]
+    #[regex(r"0o[0-7]([0-7]|_[0-7])*", |lex| i32::from_str_radix(&lex.slice()[2..].replace('_', ""), 8).ok())]
+    #[regex(r"[0-9]([0-9]|_[0-9])*", |lex| lex.slice().replace('_', "").parse::<i32>().ok())]
     Int(i32),
 
     // No underscore immediately before or after the decimal point
-    #[regex(r"[0-9]([0-9]|_[0-9])*\.[0-9]([0-9]|_[0-9])*", |lex| lex.slice().replace('_', "").parse::<f32>().ok())]
+    // Exponent (`e`/`E` with optional sign) requires at least one digit
+    #[regex(r"[0-9]([0-9]|_[0-9])*\.[0-9]([0-9]|_[0-9])*([eE][+-]?[0-9]([0-9]|_[0-9])*)?", |lex| lex.slice().replace('_', "").parse::<f32>().ok())]
+    #[regex(r"[0-9]([0-9]|_[0-9])*[eE][+-]?[0-9]([0-9]|_[0-9])*", |lex| lex.slice().replace('_', "").parse::<f32>().ok())]
     Float(f32),
 
     #[regex(r#""([^"\\]|\\.)*""#, |lex| {

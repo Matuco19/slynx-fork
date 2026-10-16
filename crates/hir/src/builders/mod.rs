@@ -200,10 +200,21 @@ impl<'a> HirQueueBuilder<'a> {
 
     pub(crate) fn process(&self) -> Result<()> {
         loop {
+            // Both channels have to be drained. Checking only `bodies` here used
+            // to abandon component work that was still queued: the `select!`
+            // below picks a ready channel pseudo-randomly, so a component
+            // enqueued while a body was being built could be dropped the moment
+            // `bodies` ran dry, leaving its declaration unmaterialized.
+            if self.bodies.receiver().is_empty() && self.components.receiver().is_empty() {
+                break;
+            }
             select! {
                 recv(self.bodies.receiver()) -> body => {
+                    // A closed-and-drained `bodies` channel stays ready, so this
+                    // arm may fire while `components` still has work; loop back
+                    // instead of leaving the remaining components unresolved.
                     let Ok(PendantFunction { func_id, body, argument_names, context, self_type }) = body else {
-                        break;
+                        continue;
                     };
                     let mut builder = HirFunctionBuilder::new(func_id, self_type);
                     for (idx, name) in argument_names.into_iter().enumerate() {
@@ -211,10 +222,6 @@ impl<'a> HirQueueBuilder<'a> {
                     }
                     let ExpressionBuildResult { statements, args } = builder.build_body(self, body, &context)?;
                     self.resolved_bodies.insert(func_id, (statements, args));
-                    if self.bodies.receiver().is_empty() {
-                        break;
-                    }
-
                 }
                 recv(self.components.receiver()) -> component => {
                     if let Ok(PendantComponent { owner, component }) = component {

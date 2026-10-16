@@ -85,6 +85,21 @@ impl Lexer {
                             });
                         }
                     }
+                    // Reject `<number><number|identifier>` with no gap (split literal, trailing `_`, invalid base digit like `0b102`, or incomplete exponent like `1.5e`, `1e`, `123abc`)
+                    if matches!(kind, TokenKind::Int(_) | TokenKind::Float(_))
+                        && let Some((Ok(next), next_range)) = raw.get(i + 1)
+                        && matches!(
+                            next,
+                            TokenKind::Int(_) | TokenKind::Float(_) | TokenKind::Identifier(_)
+                        )
+                        && next_range.start == range.end
+                    {
+                        return Err(LexerError::MalformedNumber {
+                            number: source[range.start..next_range.end].to_string(),
+                            init: range.start,
+                            end: next_range.end,
+                        });
+                    }
                     stream.push_back(Token {
                         kind: kind.clone(),
                         span: Span {
@@ -136,6 +151,76 @@ mod tests {
         for source in ["1._0", "1_.0"] {
             let err = Lexer::tokenize(source)
                 .expect_err("numeric separators next to decimal points should be malformed");
+
+            assert!(
+                matches!(err, LexerError::MalformedNumber { .. }),
+                "expected malformed number for {source}, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn lexes_separated_integers_as_a_single_token() {
+        for (source, expected) in [
+            ("0xFF_FF", 0xFFFF),
+            ("0xff_ff_ff", 0xFF_FFFF),
+            ("0b1010_0110", 0b1010_0110),
+            ("0o77_77", 0o77_77),
+            ("1_000_000", 1_000_000),
+        ] {
+            let tokens =
+                Lexer::tokenize(source).expect("separated integers should lex as one token");
+            let kinds = tokens
+                .stream
+                .into_iter()
+                .map(|token| token.kind)
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                kinds.len(),
+                1,
+                "expected one token for {source}, got {kinds:?}"
+            );
+            assert!(
+                matches!(kinds[0], TokenKind::Int(value) if value == expected),
+                "expected Int({expected}) for {source}, got {kinds:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn lexes_scientific_notation_floats_as_a_single_token() {
+        for (source, expected) in [
+            ("1.5e3", 1.5e3),
+            ("1.5e4", 1.5e4),
+            ("1.5E-3", 1.5e-3),
+            ("1.5e+3", 1.5e3),
+            ("1e10", 1e10),
+        ] {
+            let tokens =
+                Lexer::tokenize(source).expect("scientific notation should lex as one token");
+            let kinds = tokens
+                .stream
+                .into_iter()
+                .map(|token| token.kind)
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                kinds.len(),
+                1,
+                "expected one token for {source}, got {kinds:?}"
+            );
+            assert!(
+                matches!(kinds[0], TokenKind::Float(value) if (value - expected).abs() < f32::EPSILON),
+                "expected Float({expected}) for {source}, got {kinds:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_split_or_incomplete_numeric_literals() {
+        for source in ["0xFF_", "1_", "1.5e", "1e", "123abc", "0b102"] {
+            let err = Lexer::tokenize(source).expect_err("split numerics should stay malformed");
 
             assert!(
                 matches!(err, LexerError::MalformedNumber { .. }),

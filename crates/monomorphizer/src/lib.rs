@@ -46,9 +46,9 @@ use common::{PoolStorage, Span, Spanned, pool::PoolId};
 use dashmap::DashMap;
 use module_loader::FileId;
 use slynx_hir::{
-    DeclarationId, DeclarationsPool, DescriptorId, HIRError, HirComponentExpression, HirExpression,
-    HirExpressionKind, HirFunctionDeclaration, HirStatement, PropertyExpression, Result, SlynxHir,
-    SymbolPointer, TypeDeclaration, VariableId,
+    ComponentMemberDeclaration, DeclarationId, DeclarationsPool, DescriptorId, HIRError,
+    HirComponentExpression, HirExpression, HirExpressionKind, HirFunctionDeclaration, HirStatement,
+    PropertyExpression, Result, SlynxHir, SymbolPointer, TypeDeclaration, VariableId,
     id::AnyDeclarationId,
     term::{Term, TermId, TermNode},
 };
@@ -946,16 +946,26 @@ impl Monomorphizer {
             } else {
                 substituted_name
             };
+        let mut properties = node
+            .properties
+            .iter()
+            .map(|property| {
+                let expr = self.build_expression(hir, *property.expr(), subst, site)?;
+                Ok(PropertyExpression::new(property.index(), expr))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        self.fill_missing_component_properties(
+            hir,
+            new_name,
+            &mut properties,
+            component.span,
+            site,
+        )?;
+
         let new_component = HirComponentExpression {
             name: new_name,
-            properties: node
-                .properties
-                .iter()
-                .map(|property| {
-                    let expr = self.build_expression(hir, *property.expr(), subst, site)?;
-                    Ok(PropertyExpression::new(property.index(), expr))
-                })
-                .collect::<Result<Vec<_>>>()?,
+            properties,
             children: node
                 .children
                 .iter()
@@ -964,5 +974,92 @@ impl Monomorphizer {
         };
         let id = hir.store.insert_component_expression(new_component);
         Ok(component.span.make_spanned(id))
+    }
+
+    ///Fills the properties that were omitted in a component expression with
+    ///the default value declared on the component, mirroring how object
+    ///literals reject missing fields.
+    ///
+    ///For every declared property of the component type `name` that is not
+    ///already present in `properties`:
+    ///
+    ///* if the declaration carries a default (`ComponentMemberDeclaration::Property::value`),
+    ///  a [`PropertyExpression`] pointing at that default expression is
+    ///  appended;
+    ///* otherwise the property name is collected and reported through
+    ///  [`HIRError::missing_properties`].
+    ///
+    ///The default expression is read straight from the declaration as it is
+    ///already concrete: for a specialized generic component the members were
+    ///rebuilt with the specialization's substitution when the component was
+    ///instantiated, so no further substitution is applied here.
+    ///
+    ///# Arguments
+    ///
+    ///* `hir` — the HIR whose declarations supply the defaults.
+    ///* `name` — the concrete component type of the expression.
+    ///* `properties` — the explicitly provided properties; extended in place.
+    ///* `span` — the expression span, reported on missing properties.
+    ///* `site` — the file the expression lives in, reported on errors.
+    fn fill_missing_component_properties(
+        &self,
+        hir: &SlynxHir,
+        name: TermId,
+        properties: &mut Vec<PropertyExpression>,
+        span: Span,
+        site: FileId,
+    ) -> Result<()> {
+        let view = hir.view(name);
+        let deref = view.nominal();
+        let Some(component_view) = deref.is_component() else {
+            return Ok(());
+        };
+        let component_name = hir.types.get_component_name(component_view.data());
+        // Look up the declaration in the file that owns the component type:
+        // names are interned globally, so two modules may declare components
+        // with the same name and a global name scan could pick the wrong one.
+        let owner = hir.types.get_component_owner(component_view.data());
+
+        let mut missing = Vec::new();
+        let mut filled = Vec::new();
+        {
+            let file = hir.get_file(owner);
+            let Some(declaration) = file
+                .declarations
+                .declarations
+                .components
+                .iter()
+                .find(|declaration| declaration.name == component_name)
+            else {
+                return Ok(());
+            };
+            let provided: HashSet<usize> =
+                properties.iter().map(|property| property.index()).collect();
+            for member in &declaration.props {
+                let ComponentMemberDeclaration::Property {
+                    name,
+                    index,
+                    value,
+                    ..
+                } = member
+                else {
+                    continue;
+                };
+                if provided.contains(index) {
+                    continue;
+                }
+                match value {
+                    Some(default) => filled.push(PropertyExpression::new(*index, *default)),
+                    None => missing.push(*name),
+                }
+            }
+        }
+
+        if !missing.is_empty() {
+            return Err(HIRError::missing_properties(site, missing, span));
+        }
+
+        properties.extend(filled);
+        Ok(())
     }
 }

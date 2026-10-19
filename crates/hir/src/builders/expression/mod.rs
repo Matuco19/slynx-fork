@@ -191,7 +191,12 @@ impl ExpressionBuilder {
                     expr.span,
                 ))
             }
-
+            HirExpressionKind::FieldAccess { expr, .. }
+                if let HirExpressionKind::ChildAccess { .. } =
+                    queue.hir.view(expr.data).raw().kind =>
+            {
+                Ok(())
+            }
             HirExpressionKind::FieldAccess { expr, .. } => {
                 self.is_expression_able_to_write(queue, expr)
             }

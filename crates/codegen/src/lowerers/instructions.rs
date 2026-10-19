@@ -91,6 +91,7 @@ impl<'a> LoweringState<'a> {
                     _ => context.set_field(parent, *field_index as u16, value),
                 };
             }
+
             HirExpressionKind::Deref(parent_expr) => {
                 let parent = self.lower_expression(*parent_expr, context)?;
                 let ty = context.ir().value_type(value);

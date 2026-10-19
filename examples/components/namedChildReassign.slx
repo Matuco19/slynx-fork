@@ -1,0 +1,20 @@
+// xfail: a child cannot be replaced. children are not idealized for so, even though their properties might yes be able to replacing
+component Kid {
+    pub prop v: int = 3;
+}
+
+component Parent {
+    kid=Kid {}
+
+    pub func replaceChild(&mut self): void {
+        self.kid = Kid { v: 7 };
+    }
+
+    pub func readChild(&self): int -> self.kid.v;
+}
+
+func main(): int {
+    let mut parent = Parent {};
+    parent.replaceChild();
+    parent.readChild()
+}

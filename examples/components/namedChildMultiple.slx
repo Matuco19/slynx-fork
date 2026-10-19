@@ -1,0 +1,27 @@
+// Named children are declared as `name=Component { ... }` and become fields of
+// the parent. Several of them must coexist, stay individually addressable from
+// both a block-bodied and an expression-bodied method, and keep their own props
+// when the parent is built with no explicit member list.
+component Counter {
+    pub prop value: int = 0;
+
+    pub func scaled(&self, factor: int): int {
+        self.value * factor
+    }
+}
+
+component Gauge {
+    low=Counter { value: 1 }
+    high=Counter { value: 10 }
+
+    pub func spanBlock(&self): int {
+        self.high.scaled(2) - self.low.scaled(2)
+    }
+
+    pub func spanExpr(&self): int -> self.high.value - self.low.value;
+}
+
+func main(): int {
+    let gauge = Gauge {};
+    gauge.spanBlock()
+}

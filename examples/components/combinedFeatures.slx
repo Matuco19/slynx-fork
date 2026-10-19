@@ -1,0 +1,46 @@
+// A mix of the component features in one file: a generic component used as a
+// named child, several named children at two nesting levels, methods in both
+// body forms, and a method writing its own prop through `&mut self`. If any one
+// of these regresses this file stops compiling.
+component Money {
+    pub prop cents: int = 0;
+}
+
+component Cell<T> {
+    pub prop value: T;
+
+    pub func asInt(&self): int {
+        1
+    }
+}
+
+component Row {
+    amount=Money { cents: 250 }
+
+    first=Cell<int> { value: 1 }
+    second=Cell<int> { value: 2 }
+
+    pub func count(&self): int {
+        self.first.asInt() + self.second.asInt()
+    }
+
+    pub func total(&self): int -> self.amount.cents;
+}
+
+component Table {
+    row=Row {}
+
+    pub func grandTotal(&self): int {
+        self.row.total() + self.row.count()
+    }
+
+    pub func grow(&mut self): int {
+        self.row.count()
+    }
+}
+
+func main(): int {
+    let mut table = Table {};
+    table.grow();
+    table.grandTotal()
+}

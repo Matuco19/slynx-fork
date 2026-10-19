@@ -1,0 +1,17 @@
+// xfail: a generic component's own type parameter `T` cannot be used as a
+// method parameter type either — the same defect as
+// methodGenericSignature.slx, on the argument side. The signature alone is
+// rejected with `HIR Error: Type with name 'T' was not defined`, so the call
+// site below is never even reached.
+component Box<T> {
+    pub prop item: T;
+
+    pub func replace(&self, value: T): int {
+        1
+    }
+}
+
+func main(): int {
+    let box = Box<int> { item: 1 };
+    box.replace(2)
+}

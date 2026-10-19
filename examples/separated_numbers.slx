@@ -1,0 +1,6 @@
+
+func main(): void{
+	let a: f32 = 1e50;
+	let b = 0xFF_FF_FF;
+	let c = a + b;
+}

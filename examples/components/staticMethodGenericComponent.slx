@@ -1,0 +1,22 @@
+// xfail: a static method on a generic component that returns `Self` crashes the
+// compiler. `Box.make()` panics with `index out of bounds: the len is 0 but the
+// index is 0` at `crates/hir/src/generics.rs:139`, where `substitute_terms`
+// indexes the substitution slots for the type parameter — the same defect as
+// examples/generics/generic_style.slx.
+//
+// The neighbouring cases do work, so the trigger is the combination of static +
+// generic + `Self`: `Counter.new()` on a non-generic component is fine
+// (staticMethods.slx), and a static method on a generic component returning a
+// concrete type is fine too. Depending on the method name the same call reports
+// `HIR Error: Invalid type access` instead of panicking.
+component Box<T> {
+    pub prop item: T;
+
+    pub func make(): Self {
+        Self { item: 1 }
+    }
+}
+
+func main(): void {
+    let box = Box.make();
+}

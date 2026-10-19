@@ -1,0 +1,30 @@
+// A named child may be an instantiation of a generic component, with its type
+// arguments written at the use site. The child must keep its specialized prop
+// type, and the parent must be able to call a method on it and read its prop.
+component Box<T> {
+    pub prop item: T;
+
+    pub func doubled(&self, n: int): int {
+        n * 2
+    }
+
+    pub func peek(&self): int {
+        self.item
+    }
+}
+
+component Holder {
+    first=Box<int> { item: 3 }
+    second=Box<bool> { item: true }
+
+    pub func viaMethod(&self): int {
+        self.first.doubled(4)
+    }
+
+    pub func viaProp(&self): int -> self.first.item;
+}
+
+func main(): int {
+    let holder = Holder {};
+    holder.viaMethod()
+}

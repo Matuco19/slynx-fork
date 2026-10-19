@@ -133,10 +133,13 @@ impl GenericTypeArguments {
 
 /// Replaces every [`TermNode::Var`] inside `ty` with the matching type
 /// argument from `generics` (indexed by parameter position), recursing through
-/// container types.
+/// container types. A parameter with no matching argument is left in place
+/// rather than panicking, so a caller that has not resolved every parameter —
+/// an inference that failed, say — reports the unresolved parameter through
+/// its own diagnostic instead of crashing here.
 pub fn substitute_terms(hir: &SlynxHir, generics: &[TermId], ty: TermId) -> TermId {
     match hir.view(ty).raw().node() {
-        TermNode::Var(var) => generics[var.index as usize],
+        TermNode::Var(var) => generics.get(var.index as usize).copied().unwrap_or(ty),
         TermNode::Apply { target, args } => {
             let target = substitute_terms(hir, generics, *target);
             let mut new_args = Vec::with_capacity(args.len());

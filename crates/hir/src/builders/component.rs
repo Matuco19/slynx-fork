@@ -179,6 +179,7 @@ impl ComponentBuilder {
                         ComponentExpressionDescriptor {
                             component: &child.data,
                             span: child.span,
+                            expected: None,
                             context: &context,
                         },
                     )?;
@@ -190,6 +191,7 @@ impl ComponentBuilder {
                         ComponentExpressionDescriptor {
                             component: &c.data,
                             span: c.span,
+                            expected: None,
                             context: &context,
                         },
                     )?;

@@ -374,6 +374,7 @@ impl ExpressionBuilder {
                     ComponentExpressionDescriptor {
                         component,
                         span: target.span,
+                        expected,
                         context,
                     },
                 )?;

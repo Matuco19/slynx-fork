@@ -34,7 +34,7 @@ impl<'a> ASTLowerer<'a> {
                         let ty = self
                             .lower_type(queue, requester, c.data.name, &context)?
                             .term;
-                        if let Some(_) = queue.hir.view(ty).nominal().is_component() {
+                        if queue.hir.view(ty).nominal().is_component().is_some() {
                             components.push(ComponentChild {
                                 name: Some(*name),
                                 ty,
@@ -47,7 +47,7 @@ impl<'a> ASTLowerer<'a> {
                         let ty = self
                             .lower_type(queue, requester, c.data.name, &context)?
                             .term;
-                        if let Some(_) = queue.hir.view(ty).nominal().is_component() {
+                        if queue.hir.view(ty).nominal().is_component().is_some() {
                             components.push(ComponentChild { name: None, ty });
                         } else {
                             return Err(HIRError::not_a_component(requester, ty, c.span));

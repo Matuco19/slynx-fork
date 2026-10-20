@@ -20,7 +20,7 @@ impl SlynxContext {
             self.file_name(),
             info.src.to_string(),
             suggestion,
-            error.backtrace,
+            *error.backtrace,
         )
     }
 }

@@ -717,13 +717,13 @@ impl Monomorphizer {
                 node.kind.clone()
             }
             HirExpressionKind::Tuple(items) => {
-                HirExpressionKind::Tuple(self.build_expressions(hir, &items, subst, site)?)
+                HirExpressionKind::Tuple(self.build_expressions(hir, items, subst, site)?)
             }
             HirExpressionKind::Array(items) => {
-                HirExpressionKind::Array(self.build_expressions(hir, &items, subst, site)?)
+                HirExpressionKind::Array(self.build_expressions(hir, items, subst, site)?)
             }
             HirExpressionKind::Vector(items) => {
-                HirExpressionKind::Vector(self.build_expressions(hir, &items, subst, site)?)
+                HirExpressionKind::Vector(self.build_expressions(hir, items, subst, site)?)
             }
             HirExpressionKind::ArrayIndex(array, index) => {
                 let array = self.build_expression(hir, *array, subst, site)?;
@@ -758,7 +758,7 @@ impl Monomorphizer {
                 };
                 HirExpressionKind::Object {
                     name: new_name,
-                    fields: self.build_expressions(hir, &fields, subst, site)?,
+                    fields: self.build_expressions(hir, fields, subst, site)?,
                 }
             }
             HirExpressionKind::FieldAccess {
@@ -810,7 +810,7 @@ impl Monomorphizer {
                 else_branch,
             } => HirExpressionKind::If {
                 condition: self.build_expression(hir, *condition, subst, site)?,
-                then_branch: self.build_statements(hir, &then_branch, subst, site)?,
+                then_branch: self.build_statements(hir, then_branch, subst, site)?,
                 else_branch: else_branch
                     .clone()
                     .map(|branch| self.build_statements(hir, &branch, subst, site))
@@ -819,7 +819,7 @@ impl Monomorphizer {
             HirExpressionKind::Enum { ty, variant, args } => HirExpressionKind::Enum {
                 ty: substitute_type(hir, *ty, subst)?,
                 variant: *variant,
-                args: self.build_expressions(hir, &args, subst, site)?,
+                args: self.build_expressions(hir, args, subst, site)?,
             },
             HirExpressionKind::Matches {
                 value,
@@ -828,7 +828,7 @@ impl Monomorphizer {
             } => HirExpressionKind::Matches {
                 value: self.build_expression(hir, *value, subst, site)?,
                 variant: *variant,
-                args: self.build_expressions(hir, &args, subst, site)?,
+                args: self.build_expressions(hir, args, subst, site)?,
             },
             HirExpressionKind::FunctionCall {
                 name,
@@ -880,7 +880,7 @@ impl Monomorphizer {
 
                 HirExpressionKind::FunctionCall {
                     name: new_name,
-                    args: self.build_expressions(hir, &args, subst, site)?,
+                    args: self.build_expressions(hir, args, subst, site)?,
                     generics: Vec::new(),
                 }
             }
@@ -1037,10 +1037,7 @@ impl Monomorphizer {
                 properties.iter().map(|property| property.index()).collect();
             for member in &declaration.props {
                 let ComponentMemberDeclaration::Property {
-                    name,
-                    index,
-                    value,
-                    ..
+                    name, index, value, ..
                 } = member
                 else {
                     continue;

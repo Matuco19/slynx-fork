@@ -52,7 +52,7 @@ impl SourceError {
 
     pub fn backtrace(self) -> Backtrace {
         if let SourceErrorKind::Parsing(e) = *self.kind {
-            e.backtrace
+            *e.backtrace
         } else {
             *self.backtrace
         }

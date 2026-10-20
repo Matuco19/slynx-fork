@@ -68,6 +68,15 @@ impl<'a> DerefMut for FunctionContext<'a> {
     }
 }
 
+pub struct InitializeFunctionDescriptor<'a> {
+    pub function_ptr: IRPointer<Function, 1>,
+    pub function_type: TermId,
+    pub statements: &'a [Spanned<PoolId<HirStatement>>],
+    pub args: &'a [VariableId],
+    pub file: FileId,
+    pub span: Span,
+}
+
 impl<'a> LoweringState<'a> {
     fn map_function_type(
         &mut self,
@@ -91,16 +100,18 @@ impl<'a> LoweringState<'a> {
 
     pub(crate) fn initialize_function(
         &mut self,
-        fptr: IRPointer<Function, 1>,
-        func_ty: TermId,
-        statements: &[Spanned<PoolId<HirStatement>>],
-        args: &[VariableId],
-        span: Span,
         ir: &mut SlynxIR,
-        file: FileId,
+        InitializeFunctionDescriptor {
+            function_ptr,
+            function_type,
+            statements,
+            args,
+            file,
+            span,
+        }: InitializeFunctionDescriptor,
     ) -> Result<(), CodegenError> {
-        let (arg_types, return_type) = self.map_function_type(func_ty, span, ir, file)?;
-        let builder = ir.build_function(fptr);
+        let (arg_types, return_type) = self.map_function_type(function_type, span, ir, file)?;
+        let builder = ir.build_function(function_ptr);
         let mut context = FunctionContext::new(builder, file);
 
         // Switch to entry block

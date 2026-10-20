@@ -1,7 +1,7 @@
 use std::backtrace::Backtrace;
 
 use common::Span;
-use slynx_lexer::{TokenKind, tokens::Token};
+use slynx_lexer::{Token, TokenKind};
 
 #[derive(Debug)]
 pub enum ParserContext {
@@ -18,7 +18,7 @@ pub enum ExpectedContent {
 #[derive(Debug)]
 pub struct ParseError {
     pub kind: ParseErrorKind,
-    pub backtrace: Backtrace,
+    pub backtrace: Box<Backtrace>,
     pub span: Span,
 }
 
@@ -37,7 +37,7 @@ impl ParseError {
     pub fn new(kind: ParseErrorKind, span: Span) -> Self {
         Self {
             kind,
-            backtrace: Backtrace::capture(),
+            backtrace: Box::new(Backtrace::capture()),
             span,
         }
     }

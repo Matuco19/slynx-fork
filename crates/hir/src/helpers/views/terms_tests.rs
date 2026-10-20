@@ -1,12 +1,10 @@
 #[cfg(test)]
 mod views_terms_tests {
-    use common::{FrontendSymbol, SymbolsModule, VisibilityModifier};
-    use module_loader::FileId;
+    use common::{FrontendSymbol, SymbolsModule};
 
     use crate::{
         EnumVariantType, SlynxHir, SymbolPointer, arrays::ArrayTerm, context::TypesContext,
-        generic_component::GenericComponentTerm, helpers::Visible, store::HirStore, term::Term,
-        vector::VectorTerm,
+        generic_component::GenericComponentTerm, store::HirStore, term::Term, vector::VectorTerm,
     };
 
     fn hir_ctx<'a>(symbols: &'a SymbolsModule<FrontendSymbol>) -> SlynxHir<'a> {

@@ -18,7 +18,6 @@ use slynx_monomorphizer::Monomorphizer;
 use slynx_parser::{ASTExpression, ASTStatement, Type};
 
 pub use crate::compilation_context::errors::*;
-use crate::helpers::SlynxSuggestion;
 
 #[derive(Debug)]
 pub struct CompilationOutput {
@@ -225,9 +224,9 @@ impl SlynxContext {
         if let Err(e) = self.files.read(path) {
             Err(SlynxError::new_entry(
                 e,
-                format!("Could not insert file '{}'", path.display().to_string()),
+                format!("Could not insert file '{}'", path.display()),
                 path.file_name()
-                    .expect("No file provided".into())
+                    .expect("No file provided")
                     .to_string_lossy()
                     .to_string(),
                 "".to_string(),

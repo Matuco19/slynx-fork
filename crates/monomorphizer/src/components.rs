@@ -11,14 +11,11 @@
 //! survive the pass
 //! ([`neutralize_generic_components`](Monomorphizer::neutralize_generic_components)).
 
-use common::{
-    Span,
-    pool::{DedupPoolId, PoolId},
-};
+use common::{Span, pool::PoolId};
 use module_loader::FileId;
 use slynx_hir::{
-    ComponentChild, ComponentMemberDeclaration, ComponentType, DeclarationId, DescriptorId,
-    HIRError, HirComponentDeclaration, Result, SlynxHir, SymbolPointer,
+    ComponentChild, ComponentMemberDeclaration, DeclarationId, DescriptorId, HIRError,
+    HirComponentDeclaration, Result, SlynxHir, SymbolPointer,
     term::{TermId, TermNode},
 };
 

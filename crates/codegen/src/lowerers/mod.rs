@@ -20,7 +20,7 @@ use slynx_ir::{
 
 pub use types::*;
 
-use crate::CodegenError;
+use crate::{CodegenError, lowerers::functions::InitializeFunctionDescriptor};
 
 ///The IR storage backing a static declaration.
 ///
@@ -277,19 +277,21 @@ impl<'a> LoweringState<'a> {
                     statements, args, ..
                 } = declaration;
                 {
-                    let function_ptr = self
+                    let function_ptr = *self
                         .functions
                         .get(&DeclarationId::new(file.file, id))
                         .expect("Function should have been hoisted");
 
                     self.initialize_function(
-                        *function_ptr,
-                        declaration.ty,
-                        statements,
-                        args,
-                        declaration.span,
                         ir,
-                        file.file,
+                        InitializeFunctionDescriptor {
+                            file: file.file,
+                            span: declaration.span,
+                            args,
+                            statements,
+                            function_type: declaration.ty,
+                            function_ptr,
+                        },
                     )?;
                 }
             }

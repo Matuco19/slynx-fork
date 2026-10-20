@@ -1,5 +1,6 @@
 use std::backtrace::Backtrace;
 
+use module_loader::Modules;
 use slynx_hir::{
     SlynxHir,
     error::{HIRError, HIRErrorKind, InvalidWriteReason, NotMutableReason},
@@ -7,7 +8,7 @@ use slynx_hir::{
 };
 
 use crate::{
-    ErrorPosition, LineInfo, SlynxContext,
+    SlynxContext,
     compilation_context::errors::{SlynxError, helpers::suggestions_from_hir},
 };
 
@@ -107,8 +108,8 @@ impl SlynxContext {
                 "Component named as '{}' could not be found",
                 hir.get_name(*name)
             ),
-            HIRErrorKind::NotAComponent(name) => {
-                let name = hir.get_name(*name);
+            HIRErrorKind::NotAComponent(ty) => {
+                let name = hir.view(*ty).pretty_name();
                 format!("'{name}' is not a component")
             }
             HIRErrorKind::ComponentPropertyMissingType => {
@@ -198,10 +199,10 @@ impl SlynxContext {
                 format!("{property} {names} is required but wasn't provided")
             }
             HIRErrorKind::PropertyNotRecognized { prop_names, ty } => {
-                let property = if prop_names.len() == 1 {
-                    "Property"
+                let (property, is) = if prop_names.len() == 1 {
+                    ("Property", "is")
                 } else {
-                    "Properties"
+                    ("Properties", "are")
                 };
                 let objname = hir.view(*ty).pretty_name();
                 let names = prop_names
@@ -210,7 +211,7 @@ impl SlynxContext {
                     .collect::<Vec<_>>()
                     .join(", ");
 
-                format!("{property} {names} are not recognized for object {objname}",)
+                format!("{property} {names} {is} not recognized for type '{objname}'",)
             }
             HIRErrorKind::RecursiveType { ty } => {
                 let name = hir.view(*ty).pretty_name();
@@ -283,23 +284,23 @@ impl SlynxContext {
         }
     }
 
-    pub fn handle_hir_error(&self, hir: &SlynxHir, error: HIRError) -> SlynxError {
+    pub fn handle_hir_error(
+        &self,
+        modules: &Modules,
+        hir: &SlynxHir,
+        error: HIRError,
+    ) -> SlynxError {
         let suggestion = suggestions_from_hir(hir, &error);
-        let LineInfo {
-            line,
-            column_start,
-            column_end,
-            src,
-        } = self.get_line_info(&self.entry_point, error.span.start as usize);
+        let (position, src) = self.position_of(modules, error.file, error.span.start as usize);
+        let file = modules
+            .path_of(error.file)
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| self.file_name());
         SlynxError::new_hir(
-            ErrorPosition {
-                line,
-                column: column_start,
-                end_column: column_end,
-            },
+            position,
             self.hir_error_to_string(hir, &error),
-            self.file_name(),
-            src.to_string(),
+            file,
+            src,
             suggestion,
             error.backtrace,
         )
@@ -307,6 +308,7 @@ impl SlynxContext {
 
     pub fn handle_ownership_error(
         &self,
+        modules: &Modules,
         hir: &SlynxHir,
         error: &OwnershipError,
         backtrace: std::sync::Arc<Backtrace>,
@@ -344,23 +346,11 @@ impl SlynxContext {
             }
         };
 
-        let LineInfo {
-            line,
-            column_start,
-            column_end,
-            src,
-        } = self.get_line_info(&self.entry_point, error.span.start as usize);
-        SlynxError::new_ownership(
-            ErrorPosition {
-                line,
-                column: column_start,
-                end_column: column_end,
-            },
-            message,
-            self.file_name(),
-            src.to_string(),
-            vec![],
-            backtrace,
-        )
+        let (position, src) = self.position_of(modules, error.file, error.span.start as usize);
+        let file = modules
+            .path_of(error.file)
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| self.file_name());
+        SlynxError::new_ownership(position, message, file, src, vec![], backtrace)
     }
 }

@@ -223,6 +223,7 @@ mod tests {
         let err = CodegenError::new(
             CodegenErrorKind::DeclarationNotRecognized(id),
             Span::default(),
+            FileId::from_raw(0),
         );
         let result = suggestions_from_ir(&err);
         assert_eq!(

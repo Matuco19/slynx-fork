@@ -185,9 +185,18 @@ impl ExpressionBuilder {
                 let name = self.variable_name(ident).expect(
                         "name of variable should be visible. Something is creating a variable on function builders, but for some reason not defining them on the builder names",
                     );
-                Err(HIRError::invalid_variable_write(name, expr.span))
+                Err(HIRError::invalid_variable_write(
+                    self.file(),
+                    name,
+                    expr.span,
+                ))
             }
-
+            HirExpressionKind::FieldAccess { expr, .. }
+                if let HirExpressionKind::ChildAccess { .. } =
+                    queue.hir.view(expr.data).raw().kind =>
+            {
+                Ok(())
+            }
             HirExpressionKind::FieldAccess { expr, .. } => {
                 self.is_expression_able_to_write(queue, expr)
             }
@@ -201,8 +210,8 @@ impl ExpressionBuilder {
             {
                 Ok(())
             }
-            HirExpressionKind::Deref(_) => Err(HIRError::invalid_ref_write(expr.span)),
-            _ => Err(HIRError::invalid_expr_write(expr.span)),
+            HirExpressionKind::Deref(_) => Err(HIRError::invalid_ref_write(self.file(), expr.span)),
+            _ => Err(HIRError::invalid_expr_write(self.file(), expr.span)),
         }
     }
 }
@@ -365,6 +374,7 @@ impl ExpressionBuilder {
                     ComponentExpressionDescriptor {
                         component,
                         span: target.span,
+                        expected,
                         context,
                     },
                 )?;

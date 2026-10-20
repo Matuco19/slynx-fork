@@ -1,0 +1,18 @@
+// xfail: a generic component's own type parameter `T` cannot be used as a
+// method return type. The prop `item: T` resolves, but the method signature
+// does not, so the HIR builder reports
+// `HIR Error: Type with name 'T' was not defined`. Method signatures on a
+// generic component are currently limited to concrete types — see
+// methodOnGenericComponent.slx for what does work.
+component Box<T> {
+    pub prop item: T;
+
+    pub func getItem(&self): T {
+        self.item
+    }
+}
+
+func main(): int {
+    let box = Box<int> { item: 7 };
+    box.getItem()
+}

@@ -1,0 +1,36 @@
+// Methods declared with `pub` and a block body, on a plain component and on one
+// carrying named children. `pub` controls visibility; the block body form is the
+// counterpart of the `-> expr;` expression form used in namedChildren.slx.
+// Both forms must see a named child as a field of the parent.
+component Counter {
+    pub prop value: int = 0;
+
+    pub func getValue(&self): int {
+        self.value
+    }
+
+    pub func bump(&mut self, amount: int): void {
+        self.value = self.value + amount;
+    }
+}
+
+component Label {
+    pub prop text: str;
+    pub prop width: int = 1;
+}
+
+component Panel {
+    title=Label { text: "hi", width: 3 }
+
+    pub func labelWidth(&self): int {
+        self.title.width
+    }
+}
+
+func main(): int {
+    let mut counter = Counter {};
+    counter.bump(5);
+
+    let panel = Panel {};
+    panel.labelWidth()
+}

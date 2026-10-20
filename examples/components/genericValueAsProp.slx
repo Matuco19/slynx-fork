@@ -1,0 +1,27 @@
+// Generic values must be accepted where a concrete generic struct is expected:
+// a component prop may be typed with an instantiated generic object, and a
+// generic object may itself take a component's type parameter. Also covers a
+// plain generic object literal built with explicit type arguments.
+object Pair<A, B> {
+    a: A,
+    b: B,
+}
+
+object Wrapper<T> {
+    value: T,
+}
+
+component Holder<T> {
+    pub prop pair: Pair<T, T>;
+    pub prop wrapped: Wrapper<int>;
+    pub prop item: T;
+}
+
+func main(): void {
+    let direct = Pair<int, bool>(a: 1, b: true);
+    let holder = Holder<int> {
+        pair: Pair<int, int>(a: 1, b: 2),
+        wrapped: Wrapper<int>(value: 3),
+        item: 4,
+    };
+}

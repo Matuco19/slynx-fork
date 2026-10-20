@@ -59,8 +59,16 @@ impl ExpressionBuilder {
 
         let concrete = match ty_view.raw().node() {
             TermNode::Apply { .. } => ty.term,
+            // A bare `WrapperFor(...)` with no explicit type arguments has no
+            // `Apply` node of its own, so its arguments have to come from the
+            // expected type. Both sides must be compared at their *nominal* type:
+            // `dereference` keeps `Apply` nodes (that is what preserves a
+            // specialization's identity), so comparing it against `nominal()`
+            // never matched and the arguments were silently dropped, leaving
+            // `generics` empty and panicking later while substituting a field
+            // that still mentions the type parameter.
             _ if let Some(expected) = expected
-                && queue.hir.view(expected).dereference().data() == deref.data()
+                && queue.hir.view(expected).nominal().data() == deref.data()
                 && let TermNode::Apply { .. } = queue.hir.view(expected).raw().node() =>
             {
                 expected
@@ -86,6 +94,7 @@ impl ExpressionBuilder {
                 *type_names
                     .get(&field.data.name)
                     .ok_or(HIRError::property_unrecognized(
+                        self.file(),
                         ty.term,
                         vec![field.data.name],
                         field.span,
@@ -93,11 +102,19 @@ impl ExpressionBuilder {
             // A field is visible when it is `pub`, or when the literal sits in
             // the file that declared it.
             if !visible.is_visible(requester) {
-                return Err(HIRError::not_visible_property(field.data.name, field.span));
+                return Err(HIRError::not_visible_property(
+                    self.file(),
+                    field.data.name,
+                    field.span,
+                ));
             }
 
             if ordered[idx].replace(field).is_some() {
-                return Err(HIRError::already_defined(field.data.name, field.span));
+                return Err(HIRError::already_defined(
+                    self.file(),
+                    field.data.name,
+                    field.span,
+                ));
             }
         }
 
@@ -132,7 +149,7 @@ impl ExpressionBuilder {
             }
 
             if !missing.is_empty() {
-                return Err(HIRError::missing_properties(missing, span));
+                return Err(HIRError::missing_properties(self.file(), missing, span));
             }
             fields
         };

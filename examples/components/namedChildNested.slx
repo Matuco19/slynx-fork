@@ -1,0 +1,30 @@
+// Named children nest: a named child may itself declare named children, and the
+// whole chain stays reachable through one method per level. Each level is a
+// separate component type, so this also checks that the child's own type is used
+// rather than the parent's.
+component Leaf {
+    pub prop value: int = 1;
+
+    pub func read(&self): int {
+        self.value
+    }
+}
+
+component Branch {
+    leaf=Leaf { value: 7 }
+
+    pub func read(&self): int {
+        self.leaf.read()
+    }
+}
+
+component Trunk {
+    branch=Branch {}
+
+    pub func readExpr(&self): int -> self.branch.read();
+}
+
+func main(): int {
+    let trunk = Trunk {};
+    trunk.readExpr()
+}

@@ -61,6 +61,16 @@ impl Substitution {
 ///one `_<name>_<hash>` segment per concrete type argument, where the hash is
 ///computed structurally over the `HirType` value. The name stays unique per
 ///type-argument list while remaining human-readable.
+///
+///`<name>` is the argument's [`internal_name`](slynx_hir::helpers::views::terms::HirViewer::internal_name)
+///run through [`sanitize_into`], because `internal_name` alone still emits type
+///syntax for an application: it delegates `Apply` to the same renderer
+///`pretty_name` uses, which formats `{base}<{generics}>`. A mangled name is
+///emitted verbatim by every backend, so it must reach them as a plain
+///identifier. `internal_name` is the better input — it renders tuples as
+///`Tuple_a@b` and references as `Ref_int` rather than `(a,b)` and `&int` — but
+///the sanitizer, not the choice of view, is what removes the punctuation.
+///The template name itself is used exactly as declared.
 pub(crate) fn mangle_name(hir: &SlynxHir, name: SymbolPointer, args: &[TermId]) -> String {
     let base = hir.get_name(name);
     let mut out = String::with_capacity(base.len() + args.len() * 20);
@@ -69,10 +79,37 @@ pub(crate) fn mangle_name(hir: &SlynxHir, name: SymbolPointer, args: &[TermId]) 
         let mut hasher = DefaultHasher::new();
         hir.view(*arg).raw().hash(&mut hasher);
         out.push('_');
-        out.push_str(&hir.view(*arg).pretty_name());
+        sanitize_into(&hir.view(*arg).internal_name(), &mut out);
         out.push_str(&format!("_{:04x}", hasher.finish() & 0xffff));
     }
     out
+}
+
+///Appends `name` to `out`, replacing every character that cannot appear in an
+///identifier with `_`.
+///
+///An `internal_name` still carries punctuation for some shapes — the angle
+///brackets and commas of an application (`Option<sint32>`), the brackets of an
+///array (`[4]sint32`), the `@` of a tuple. None of that belongs in a symbol
+///name, and collapsing it to `_` keeps the mangled name readable
+///(`Box_Option_sint32_543a`) while the trailing hash disambiguates whatever the
+///sanitizing erased.
+///
+///The closing bracket is dropped rather than kept as a trailing `_`, so the
+///caller's own `_` before the hash does not double up: `Option<sint32>`
+///contributes `Option_sint32`, not `Option_sint32_`.
+fn sanitize_into(name: &str, out: &mut String) {
+    let start = out.len();
+    out.extend(name.chars().map(|c| {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            c
+        } else {
+            '_'
+        }
+    }));
+    while out.len() > start && out.ends_with('_') {
+        out.pop();
+    }
 }
 
 ///Substitutes every generic parameter inside `ty` with its concrete type.
@@ -198,14 +235,6 @@ pub(crate) fn contains_generic_param(hir: &SlynxHir, ty: TermId) -> bool {
                     .iter()
                     .any(|slot| !slot.is_null() && contains_generic_param(hir, *slot))
         }
-        TermNode::Data(DescriptorId::Enum(enum_id)) => {
-            hir.view(*enum_id).variants().iter().any(|variant| {
-                variant
-                    .payload
-                    .iter()
-                    .any(|payload| contains_generic_param(hir, *payload))
-            })
-        }
 
         _ => false,
     }
@@ -261,7 +290,9 @@ pub(crate) fn contains_resolvable_reference(hir: &SlynxHir, ty: TermId) -> bool 
                 .iter()
                 .any(|prop| contains_resolvable_reference(hir, prop.ty))
                 || view.children().iter().any(|child| {
-                    let child = hir.view(*child);
+                    let child = hir.view(child.ty).nominal().is_component().expect(
+                        "HIR generated component incorrectly with child not being an component",
+                    );
                     child
                         .props()
                         .iter()

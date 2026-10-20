@@ -1,0 +1,20 @@
+// xpass: writing the property of a child is possible, later it will must be able to emit the update for all the dependants of it
+component Inner {
+    pub prop value: int = 0;
+}
+
+component Outer {
+    inner=Inner {}
+
+    pub func setChild(&mut self): void {
+        self.inner.value = 7;
+    }
+
+    pub func readChild(&self): int -> self.inner.value;
+}
+
+func main(): int {
+    let mut outer = Outer {};
+    outer.setChild();
+    outer.readChild()
+}

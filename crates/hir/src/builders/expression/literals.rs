@@ -84,6 +84,17 @@ impl ExpressionBuilder {
             },
         )?;
         let expr_ty = queue.hir.view(build_expr.data).ty();
+
+        if let Some(expected) = descriptor.expected
+            && let Some(integer_info) = queue.hir.view(expected).is_integer()
+            && integer_info.signed == false
+        {
+            return Err(HIRError::invalid_unary_expression(
+                self.file(),
+                expr_ty.term,
+                descriptor.span,
+            ));
+        }
         match &queue.hir.view(build_expr.data).raw().kind {
             HirExpressionKind::Int(value) => {
                 return Ok(HirExpression {

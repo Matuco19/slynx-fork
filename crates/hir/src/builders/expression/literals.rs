@@ -1,5 +1,5 @@
 use common::{
-    Span, Spanned,
+    Operator, Span, Spanned,
     pool::{DedupPoolId, PoolId},
 };
 use either::Either;
@@ -10,7 +10,7 @@ use crate::{
     builders::HirQueueBuilder,
     error::NotMutableReason,
     helpers::IntegerTypeInfo,
-    term::{Term, TermId, TermNode},
+    term::{PrimitiveType, Term, TermId, TermNode},
 };
 
 use super::{ExpressionBuilder, ExpressionDescriptor};
@@ -30,6 +30,17 @@ pub struct DereferenceExpressionDescriptor<'a> {
     ///The context of the types to this expression
     pub context: &'a TypeContext<'a>,
     ///The expected type of the dereference, if any. If some, and the generated type does not match, an error will be returned.
+    pub expected: Option<TermId>,
+}
+
+pub struct NegateExpressionDescriptor<'a> {
+    ///The expression to negate
+    pub target: Spanned<DedupPoolId<ASTExpression>>,
+    ///The span of the whole negation expression
+    pub span: Span,
+    ///The context of the types to this expression
+    pub context: &'a TypeContext<'a>,
+    ///The expected type of the negation
     pub expected: Option<TermId>,
 }
 
@@ -58,6 +69,71 @@ impl ExpressionBuilder {
             ty: Owned::new(expr_ty.owner, inner),
             kind: HirExpressionKind::Deref(build_expr),
         })
+    }
+
+    pub(super) fn build_negate(
+        &mut self,
+        queue: &HirQueueBuilder,
+        descriptor: NegateExpressionDescriptor<'_>,
+    ) -> Result<HirExpression> {
+        if let Some(expected) = descriptor.expected
+            && let Some(integer_info) = queue.hir.view(expected).is_integer()
+            && !integer_info.signed
+        {
+            return Err(HIRError::invalid_unary_expression(
+                self.file(),
+                expected,
+                descriptor.span,
+            ));
+        }
+        let build_expr = self.build_expression(
+            queue,
+            ExpressionDescriptor {
+                target: descriptor.target,
+                expected: descriptor.expected,
+                context: descriptor.context,
+            },
+        )?;
+        let expr_ty = queue.hir.view(build_expr.data).ty();
+        match &queue.hir.view(build_expr.data).raw().kind {
+            HirExpressionKind::Int(value) => {
+                return Ok(HirExpression {
+                    ty: expr_ty,
+                    kind: HirExpressionKind::Int(value.wrapping_neg()),
+                });
+            }
+            HirExpressionKind::Float(value) => {
+                return Ok(HirExpression {
+                    ty: expr_ty,
+                    kind: HirExpressionKind::Float(-*value),
+                });
+            }
+            _ => {}
+        }
+        let zero = match queue.hir.view(expr_ty.term).raw().node() {
+            TermNode::Primitive(PrimitiveType::Signed { .. }) => HirExpressionKind::Int(0),
+            TermNode::Primitive(PrimitiveType::Float32 | PrimitiveType::Float64) => {
+                HirExpressionKind::Float(0.0.into())
+            }
+            _ => {
+                return Err(HIRError::invalid_unary_expression(
+                    self.file(),
+                    expr_ty.term,
+                    descriptor.span,
+                ));
+            }
+        };
+        let zero = queue.hir.store.insert_expression(HirExpression {
+            ty: expr_ty,
+            kind: zero,
+        });
+        Ok(queue.hir.create_binary_expression(
+            self.file(),
+            descriptor.span.make_spanned(zero),
+            build_expr,
+            Operator::Sub,
+            expr_ty.term,
+        ))
     }
 
     pub(super) fn build_reference_expression(

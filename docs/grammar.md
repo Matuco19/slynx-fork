@@ -84,7 +84,7 @@ From lowest to highest binding:
 5. `<<` `&` `|` `^` (shift/bitwise)
 6. `+` `-` (additive)
 7. `*` `/` (multiplicative)
-8. unary: `&` `&mut` `*` (reference/dereference), literals, calls, postfix
+8. unary: `-` (arithmetic negation), `&` `&mut` `*` (reference/dereference), literals, calls, postfix
 
 ```ebnf
 <expr> ::= <if_expr> | <array_lit> | <vector_lit> | <deref_expr> | <ref_expr> | <logical>
@@ -93,7 +93,8 @@ From lowest to highest binding:
 <comparison> ::= <bit_ops> { ("==" | "<" | ">" | "<=" | ">=") <bit_ops> }
 <bit_ops> ::= <additive> { ("<<" | "&" | "|" | "^") <bit_ops> }
 <additive> ::= <multiplicative> { ("+" | "-") <multiplicative> }
-<multiplicative> ::= <primary> { ("*" | "/") <primary> }
+<multiplicative> ::= <unary> { ("*" | "/") <unary> }
+<unary> ::= "-" <unary> | <primary>
 
 <primary> ::= <int_lit>
             | <float_lit>
@@ -319,6 +320,14 @@ The nine top-level declaration kinds are: `object`, `component`, `func`, `alias`
 Inside an extern block, only declaration *signatures* are parsed (types only, followed by `;`).
 
 ## Operators
+
+### Unary Operators
+
+| Operator | Production |
+|----------|------------|
+| `-`      | unary      |
+
+Unary `-` binds tighter than `*` and `/`, can be chained, and accepts signed integers and floats.
 
 ### Binary Operators
 

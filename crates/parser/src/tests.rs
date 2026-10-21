@@ -242,7 +242,7 @@ fn interface_has_no_super_interface_list() {
 #[test]
 fn generic_call_parses_with_explicit_type_args() {
     let (program, symbols, types, statements, expressions) =
-        parse_program("func main(): int { identity<i32>(5); }");
+        parse_program("func main(): sint32 { identity<i32>(5); }");
 
     let func: &FuncDeclaration = program.get_pool().get(PoolId::new(0));
     let ASTStatement::Expression(expr) = &statements[func.body[0].data] else {
@@ -278,7 +278,7 @@ fn generic_call_parses_with_explicit_type_args() {
 #[test]
 fn generic_call_accepts_array_type_args() {
     let (program, symbols, types, statements, expressions) =
-        parse_program("func main(): int { funcall<[4]int>(data); }");
+        parse_program("func main(): sint32 { funcall<[4]sint32>(data); }");
 
     let func: &FuncDeclaration = program.get_pool().get(PoolId::new(0));
     let ASTStatement::Expression(expr) = &statements[func.body[0].data] else {
@@ -355,11 +355,82 @@ fn comparison_operator_still_parses() {
 }
 
 #[test]
+fn unary_minus_binds_tighter_than_multiplication() {
+    let (program, symbols, _, statements, expressions) = parse_program(
+        "func main(): sint32 {
+            let a: sint32 = -x * y;
+            let b: sint32 = x * -y;
+            let c: int = --x;
+        }",
+    );
+
+    let func: &FuncDeclaration = program.get_pool().get(PoolId::new(0));
+
+    let ASTStatement::Var { rhs, .. } = &statements[func.body[0].data] else {
+        panic!("expected a variable declaration");
+    };
+    let ASTExpression::Binary {
+        op,
+        lhs,
+        rhs: product_rhs,
+    } = &expressions[rhs.data]
+    else {
+        panic!("expected a multiplicative expression");
+    };
+    assert_eq!(*op, Operator::Star);
+    let ASTExpression::Negate(target) = &expressions[lhs.data] else {
+        panic!("expected the left operand to be negated");
+    };
+    let ASTExpression::Identifier(name) = &expressions[target.data] else {
+        panic!("expected the negation target to be an identifier");
+    };
+    assert_eq!(*name, symbols.intern("x"));
+    let ASTExpression::Identifier(name) = &expressions[product_rhs.data] else {
+        panic!("expected the right operand to be an identifier");
+    };
+    assert_eq!(*name, symbols.intern("y"));
+
+    let ASTStatement::Var { rhs, .. } = &statements[func.body[1].data] else {
+        panic!("expected a variable declaration");
+    };
+    let ASTExpression::Binary {
+        op,
+        rhs: product_rhs,
+        ..
+    } = &expressions[rhs.data]
+    else {
+        panic!("expected a multiplicative expression");
+    };
+    assert_eq!(*op, Operator::Star);
+    let ASTExpression::Negate(target) = &expressions[product_rhs.data] else {
+        panic!("expected the right operand to be negated");
+    };
+    let ASTExpression::Identifier(name) = &expressions[target.data] else {
+        panic!("expected the negation target to be an identifier");
+    };
+    assert_eq!(*name, symbols.intern("y"));
+
+    let ASTStatement::Var { rhs, .. } = &statements[func.body[2].data] else {
+        panic!("expected a variable declaration");
+    };
+    let ASTExpression::Negate(inner) = &expressions[rhs.data] else {
+        panic!("expected a chained negation");
+    };
+    let ASTExpression::Negate(inner) = &expressions[inner.data] else {
+        panic!("expected the inner expression to be negated");
+    };
+    let ASTExpression::Identifier(name) = &expressions[inner.data] else {
+        panic!("expected the innermost negation target to be an identifier");
+    };
+    assert_eq!(*name, symbols.intern("x"));
+}
+
+#[test]
 fn right_shift_parses_without_panicking() {
     // `>>` is not a single lexer token: the parser must recognise it as two
     // consecutive `>` tokens instead of falling into an unreachable!().
     let (program, symbols, _, statements, expressions) =
-        parse_program("func main(): int { let a: int = x >> y; }");
+        parse_program("func main(): sint32 { let a: sint32 = x >> y; }");
 
     let func: &FuncDeclaration = program.get_pool().get(PoolId::new(0));
     let ASTStatement::Var { rhs, .. } = &statements[func.body[0].data] else {
@@ -412,7 +483,7 @@ fn chained_right_shift_parses_without_panicking() {
     // After consuming the two `>` tokens of the first `>>`, the loop must
     // re-check the *next* token pair instead of misreading a lone `>`.
     let (program, symbols, _, statements, expressions) =
-        parse_program("func main(): int { let a: int = x >> y >> z; }");
+        parse_program("func main(): sint32 { let a: sint32 = x >> y >> z; }");
 
     let func: &FuncDeclaration = program.get_pool().get(PoolId::new(0));
     let ASTStatement::Var { rhs, .. } = &statements[func.body[0].data] else {

@@ -83,6 +83,7 @@ pub enum ASTExpression {
         expr: Spanned<DedupPoolId<ASTExpression>>,
     },
     Deref(Spanned<DedupPoolId<ASTExpression>>),
+    Negate(Spanned<DedupPoolId<ASTExpression>>),
 }
 
 impl ASTExpression {

@@ -85,6 +85,11 @@ pub enum HIRErrorKind {
     InvalidTypeAccess,
     ExpressionNotMutable(NotMutableReason),
     InvalidDeref,
+    /// A unary expression was applied to an operand type that does not support it
+    InvalidUnaryExpression {
+        /// The type of the operand
+        ty: TermId,
+    },
     ArrayLengthMismatch {
         expected: usize,
         actual: usize,
@@ -354,6 +359,9 @@ impl HIRError {
 
     pub fn invalid_deref(file: FileId, span: Span) -> Self {
         Self::new(file, HIRErrorKind::InvalidDeref, span)
+    }
+    pub fn invalid_unary_expression(file: FileId, ty: TermId, span: Span) -> Self {
+        Self::new(file, HIRErrorKind::InvalidUnaryExpression { ty }, span)
     }
     pub fn array_length_mismatch(file: FileId, expected: usize, actual: usize, span: Span) -> Self {
         Self::new(
@@ -678,6 +686,9 @@ impl std::fmt::Display for HIRError {
             HIRErrorKind::InvalidTypeAccess => write!(f, "Invalid type access"),
             HIRErrorKind::ExpressionNotMutable(_) => write!(f, "Expression not mutable"),
             HIRErrorKind::InvalidDeref => write!(f, "Invalid deref"),
+            HIRErrorKind::InvalidUnaryExpression { .. } => {
+                write!(f, "Invalid unary expression")
+            }
             HIRErrorKind::ArrayLengthMismatch { expected, actual } => {
                 write!(
                     f,

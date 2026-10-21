@@ -92,7 +92,6 @@ impl<'a> TypeLowerer<'a> {
             }
             TermNode::Primitive(PrimitiveType::Float32) => ir.types.f32_type(),
             TermNode::Primitive(PrimitiveType::Float64) => ir.types.f64_type(),
-
             TermNode::Primitive(PrimitiveType::Void) => ir.types.void_type(),
             TermNode::Primitive(PrimitiveType::String) => ir.types.str_type(),
             TermNode::Var(_) => ir.types.generic_component_type(),

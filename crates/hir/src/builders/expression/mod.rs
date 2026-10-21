@@ -261,8 +261,15 @@ impl ExpressionBuilder {
             ASTExpression::False => self.build_bool(queue, false),
             ASTExpression::True => self.build_bool(queue, true),
             ASTExpression::Identifier(name) => self.build_identifier(queue, *name, target.span)?,
-            ASTExpression::IntLiteral(i) => self.build_int_literal(queue, *i),
-            ASTExpression::FloatLiteral(f) => self.build_float_literal(queue, f.into_inner()),
+            ASTExpression::IntLiteral(i) => {
+                self.build_int_literal(queue, *i, expected, target.span)?
+            }
+            ASTExpression::FloatLiteral(f) => queue.hir.create_float_expression(
+                self.file(),
+                f.into_inner(),
+                expected.unwrap_or(queue.hir.types.create_type(Term::float32_type())),
+                target.span,
+            )?,
             ASTExpression::StringLiteral(s) => self.build_str_literal(queue, *s),
             ASTExpression::Tuple(fields) => self.build_tuple_expression(
                 queue,

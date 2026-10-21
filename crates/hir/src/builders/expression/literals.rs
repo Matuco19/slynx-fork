@@ -1,5 +1,5 @@
 use common::{
-    Spanned,
+    Span, Spanned,
     pool::{DedupPoolId, PoolId},
 };
 use either::Either;
@@ -9,6 +9,7 @@ use crate::{
     HIRError, HirExpression, HirExpressionKind, Owned, Result, SymbolPointer,
     builders::HirQueueBuilder,
     error::NotMutableReason,
+    helpers::IntegerTypeInfo,
     term::{Term, TermId, TermNode},
 };
 
@@ -128,12 +129,56 @@ impl ExpressionBuilder {
         }
     }
 
-    pub(super) fn build_int_literal(&self, queue: &HirQueueBuilder, value: i32) -> HirExpression {
-        queue.hir.create_int_expression(self.file(), value, 32)
-    }
+    pub(super) fn build_int_literal(
+        &self,
+        queue: &HirQueueBuilder,
+        value: i32,
+        expected: Option<TermId>,
+        span: Span,
+    ) -> Result<HirExpression> {
+        let numeric_info = if let Some(expected) = expected {
+            let Some(integer_info) = queue.hir.view(expected).is_integer() else {
+                return Err(HIRError::expected_integer_type(self.file(), expected, span));
+            };
+            integer_info
+        } else {
+            IntegerTypeInfo::default()
+        };
 
-    pub(super) fn build_float_literal(&self, queue: &HirQueueBuilder, value: f32) -> HirExpression {
-        queue.hir.create_float_expression(self.file(), value)
+        let (min, max) = {
+            let min = if numeric_info.signed {
+                -2i128.pow(numeric_info.bit_length as u32 - 1)
+            } else {
+                0
+            };
+            let max = if numeric_info.signed {
+                2i128.pow(numeric_info.bit_length as u32 - 1)
+            } else {
+                2i128.pow(numeric_info.bit_length as u32)
+            } - 1;
+            (min, max)
+        };
+        {
+            let value128 = value as i128;
+            if value128 < min || value128 > max {
+                return Err(HIRError::integer_out_of_bounds(
+                    self.file(),
+                    value as i64,
+                    numeric_info,
+                    min,
+                    max,
+                    span,
+                ));
+            }
+        }
+        let hir_type = queue.hir.types.create_type(if numeric_info.signed {
+            Term::signed_integer_type(numeric_info.bit_length)
+        } else {
+            Term::unsigned_integer_type(numeric_info.bit_length)
+        });
+        Ok(queue
+            .hir
+            .create_int_expression(self.file(), value, hir_type))
     }
 
     pub(super) fn build_str_literal(

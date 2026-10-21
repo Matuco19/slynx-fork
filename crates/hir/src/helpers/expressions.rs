@@ -1,9 +1,9 @@
 use crate::{
-    Owned, SlynxHir, SymbolPointer,
+    HIRError, Owned, Result, SlynxHir, SymbolPointer,
     model::{HirExpression, HirExpressionKind},
-    term::{Term, TermId},
+    term::{PrimitiveType, Term, TermId, TermNode},
 };
-use common::{Operator, Spanned, pool::PoolId};
+use common::{Operator, Span, Spanned, pool::PoolId};
 use module_loader::FileId;
 
 impl<'a> SlynxHir<'a> {
@@ -20,22 +20,29 @@ impl<'a> SlynxHir<'a> {
     }
 
     /// Creates an int expression that must be inferred, owned by `owner`.
-    pub(crate) fn create_int_expression(&self, owner: FileId, i: i32, bitlen: u8) -> HirExpression {
+    pub(crate) fn create_int_expression(&self, owner: FileId, i: i32, ty: TermId) -> HirExpression {
         HirExpression {
             kind: HirExpressionKind::Int(i),
-            ty: Owned::new(
-                owner,
-                self.types.create_type(Term::signed_integer_type(bitlen)),
-            ),
+            ty: Owned::new(owner, ty),
         }
     }
 
     /// Creates a float expression owned by `owner`.
-    pub(crate) fn create_float_expression(&self, owner: FileId, float: f32) -> HirExpression {
-        HirExpression {
-            kind: HirExpressionKind::Float(float.into()),
-            ty: Owned::new(owner, self.types.create_type(Term::float32_type())),
+    pub(crate) fn create_float_expression(
+        &self,
+        owner: FileId,
+        float: f32,
+        ty: TermId,
+        span: Span,
+    ) -> Result<HirExpression> {
+        match self.view(ty).raw().node() {
+            TermNode::Primitive(PrimitiveType::Float32 | PrimitiveType::Float64) => {}
+            _ => return Err(HIRError::expected_float_type(owner, ty, span)),
         }
+        Ok(HirExpression {
+            kind: HirExpressionKind::Float(float.into()),
+            ty: Owned::new(owner, ty),
+        })
     }
     /// Creates a binary expression owned by `owner`.
     pub(crate) fn create_binary_expression(

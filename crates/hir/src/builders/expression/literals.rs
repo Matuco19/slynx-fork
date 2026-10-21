@@ -78,7 +78,7 @@ impl ExpressionBuilder {
     ) -> Result<HirExpression> {
         if let Some(expected) = descriptor.expected
             && let Some(integer_info) = queue.hir.view(expected).is_integer()
-            && integer_info.signed == false
+            && !integer_info.signed
         {
             return Err(HIRError::invalid_unary_expression(
                 self.file(),

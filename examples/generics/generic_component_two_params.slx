@@ -4,7 +4,7 @@ component Pair<T, U> {
 }
 
 component Main {
-    Pair<int, bool> {
+    Pair<sint32, bool> {
         first: 1,
         second: true,
     }

@@ -1,6 +1,6 @@
 // xfail: a child cannot be replaced. children are not idealized for so, even though their properties might yes be able to replacing
 component Kid {
-    pub prop v: int = 3;
+    pub prop v: sint32 = 3;
 }
 
 component Parent {
@@ -10,10 +10,10 @@ component Parent {
         self.kid = Kid { v: 7 };
     }
 
-    pub func readChild(&self): int -> self.kid.v;
+    pub func readChild(&self): sint32 -> self.kid.v;
 }
 
-func main(): int {
+func main(): sint32 {
     let mut parent = Parent {};
     parent.replaceChild();
     parent.readChild()

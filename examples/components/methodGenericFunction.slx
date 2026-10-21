@@ -10,18 +10,18 @@
 //     at crates/codegen/src/lowerers/expressions.rs:119
 //
 // See docs/refactors/10-component-feature-gaps.md §3b. The sibling case §3a —
-// writing the call as `counter.id<int>(7)` — fails differently and more quietly,
+// writing the call as `counter.id<sint32>(7)` — fails differently and more quietly,
 // with `Property 'id' is not recognized for type 'Counter'`, because the method
 // lookup uses the bare name and never sees the type arguments.
 component Counter {
-    pub prop value: int = 0;
+    pub prop value: sint32 = 0;
 
     pub func id<U>(&self, x: U): U {
         x
     }
 }
 
-func main(): int {
+func main(): sint32 {
     let counter = Counter {};
     counter.id(7)
 }

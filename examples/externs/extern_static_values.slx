@@ -1,6 +1,6 @@
 extern {
 	static appName: str;
-	static version: int;
+	static version: sint32;
 }
 
 func main(): void {

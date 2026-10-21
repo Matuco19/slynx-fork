@@ -2,12 +2,12 @@ object Wrapper<T> {
     data: T
 }
 
-func f(): &int {
-    let a = Wrapper<Wrapper<int>>(data: Wrapper(data: 5));
+func f(): &sint32 {
+    let a = Wrapper<Wrapper<sint32>>(data: Wrapper(data: 5));
     return &a.data.data;
 }
 
-func main(): &int {
+func main(): &sint32 {
     let a = 5;
     return &a;
 }

@@ -1,8 +1,8 @@
 object Person {
-    age: int,
+    age: sint32,
 }
 
-func main(): int {
+func main(): sint32 {
     let nested = ((Person(age: 22), "ok"), 42);
     nested.1
 }

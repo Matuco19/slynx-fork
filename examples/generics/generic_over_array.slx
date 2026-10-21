@@ -1,9 +1,9 @@
-// A generic function over a fixed-size array parameter works: `len<int>` is
-// specialized with `[4]int` and the array literal unifies with it.
-func len<T>(items: [4]T): int {
+// A generic function over a fixed-size array parameter works: `len<sint32>` is
+// specialized with `[4]sint32` and the array literal unifies with it.
+func len<T>(items: [4]T): sint32 {
     4
 }
 
-func main(): int {
-    len<int>([1,2,3,4])
+func main(): sint32 {
+    len<sint32>([1,2,3,4])
 }

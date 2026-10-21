@@ -1,4 +1,4 @@
-func main(): int {
+func main(): sint32 {
     let b = true;
     let a = if b {
         5

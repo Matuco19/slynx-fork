@@ -9,9 +9,9 @@ component Pair<T, U> {
 }
 
 component Main {
-    Pair<int, bool> {
-        first: 30.0, // float literal → T = int
-        second: 1,   // int literal → U = bool
+    Pair<sint32, bool> {
+        first: 30.0, // float literal → T = sint32
+        second: 1,   // integer literal → U = bool
     }
 }
 

@@ -8,7 +8,7 @@ enum Option<T> {
     None
 }
 
-extend Option<int>: Stringifiable {
+extend Option<sint32>: Stringifiable {
     func stringify(&self): str { "some" }
 }
 

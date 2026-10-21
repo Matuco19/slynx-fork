@@ -4,7 +4,7 @@ use crate::common::{compile_source_err, compile_source_err_contains, compile_sou
 
 const BOX_SOURCE: &str = r#"
 object Box {
-    value: int
+    value: sint32
 }
 "#;
 

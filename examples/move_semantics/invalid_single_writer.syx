@@ -2,7 +2,7 @@
 // move-like binding (`let mut p2 = p`) currently compiles, but the comments
 // below expect an error. This documents the gap.
 object Person {
-    age: int
+    age: sint32
 }
 func main(): void{
     let mut p = Person(age:0);

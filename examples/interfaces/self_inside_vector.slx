@@ -4,7 +4,7 @@ interface Wrapped {
 }
 
 object Item {
-    value: int
+    value: sint32
 }
 
 extend Item: Wrapped {

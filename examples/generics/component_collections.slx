@@ -3,10 +3,10 @@ component Box<T> {
 }
 
 component Main {
-    Box<[]int> {
+    Box<[]sint32> {
         item: {1,2,3}
     }
-    Box<[4]int> {
+    Box<[4]sint32> {
         item: [1,2,3,4]
     }
 }

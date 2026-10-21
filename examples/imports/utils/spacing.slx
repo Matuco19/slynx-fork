@@ -1,3 +1,3 @@
-func default_padding(): int {
+func default_padding(): sint32 {
     16
 }

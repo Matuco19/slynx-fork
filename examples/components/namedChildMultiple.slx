@@ -3,9 +3,9 @@
 // both a block-bodied and an expression-bodied method, and keep their own props
 // when the parent is built with no explicit member list.
 component Counter {
-    pub prop value: int = 0;
+    pub prop value: sint32 = 0;
 
-    pub func scaled(&self, factor: int): int {
+    pub func scaled(&self, factor: sint32): sint32 {
         self.value * factor
     }
 }
@@ -14,14 +14,14 @@ component Gauge {
     low=Counter { value: 1 }
     high=Counter { value: 10 }
 
-    pub func spanBlock(&self): int {
+    pub func spanBlock(&self): sint32 {
         self.high.scaled(2) - self.low.scaled(2)
     }
 
-    pub func spanExpr(&self): int -> self.high.value - self.low.value;
+    pub func spanExpr(&self): sint32 -> self.high.value - self.low.value;
 }
 
-func main(): int {
+func main(): sint32 {
     let gauge = Gauge {};
     gauge.spanBlock()
 }

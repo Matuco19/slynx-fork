@@ -4,7 +4,7 @@ enum Name {
     Baz
 }
 
-func main(): int {
+func main(): sint32 {
     let a = Name.Foo;
     let b = Name.Bar;
     if (a matches Foo) && (b matches Bar) {

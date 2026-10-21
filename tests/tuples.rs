@@ -38,7 +38,7 @@ fn test_empty_tuple_as_parameter() {
 #[test]
 fn test_tuple_type_annotation() {
     common::compile_source_ok(
-        "func pair(): (int, str) { (1, \"ok\") } func main(): void { pair(); }",
+        "func pair(): (sint32, str) { (1, \"ok\") } func main(): void { pair(); }",
     );
 }
 
@@ -52,7 +52,7 @@ fn test_tuple_literal_with_missing_comma_is_rejected() {
 #[test]
 fn test_empty_tuple_access_is_rejected() {
     let err = common::compile_source_err_contains(
-        "func main(): int { let unit = (); unit.0 }",
+        "func main(): sint32 { let unit = (); unit.0 }",
         "Tuple index",
     );
     assert!(

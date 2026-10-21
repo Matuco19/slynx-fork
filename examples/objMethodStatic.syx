@@ -5,18 +5,18 @@ func main(): void {
 }
 
 pub object MyObj {
-    value: int,
+    value: sint32,
     name: str,
 
-    func instanceMethod(&mut self, x: int): void {
+    func instanceMethod(&mut self, x: sint32): void {
         self.value = self.value + x;
     }
 
-    func getValue(&self): int {
+    func getValue(&self): sint32 {
         self.value
     }
 
-    func staticFactory(x: int, s: str): Self {
+    func staticFactory(x: sint32, s: str): Self {
         Self(value: x, name: s)
     }
 }

@@ -1,11 +1,11 @@
-// xpass: `([]int)?` as a generic type argument fails to parse.
+// xpass: `([]sint32)?` as a generic type argument fails to parse.
 import option using {Option};
 func identity<T>(x: T): T {
     x
 }
 
-func main(): Option<[]int> {
-    let v = identity<Option<[]int>>({1,2,3});
+func main(): Option<[]sint32> {
+    let v = identity<Option<[]sint32>>({1,2,3});
     v
 
 }

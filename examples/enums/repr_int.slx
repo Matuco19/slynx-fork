@@ -1,4 +1,4 @@
-enum Numbers(int) {
+enum Numbers(sint32) {
     One,
     Two,
     Three

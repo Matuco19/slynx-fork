@@ -8,6 +8,6 @@ enum Boxed<T> {
     Empty
 }
 
-func identity(x: Boxed<int>): Boxed<int> {
+func identity(x: Boxed<sint32>): Boxed<sint32> {
     x
 }

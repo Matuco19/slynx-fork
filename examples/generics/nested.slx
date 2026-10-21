@@ -6,6 +6,6 @@ func wrap<T>(x: T): T {
     identity<T>(x)
 }
 
-func main(): int {
-    wrap<int>(42)
+func main(): sint32 {
+    wrap<sint32>(42)
 }

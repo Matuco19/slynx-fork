@@ -1,17 +1,17 @@
 interface Stringifiable {
     func stringify(&self): str;
-    func length(&self): int;
+    func length(&self): sint32;
 }
 
 extend str: Stringifiable {
     func stringify(&self): str -> self;
-    func length(&self): int -> 0;
+    func length(&self): sint32 -> 0;
 }
 
 object Person: Stringifiable {
     name: str,
     func stringify(&self): str -> self.name;
-    func length(&self): int -> self.name.length();
+    func length(&self): sint32 -> self.name.length();
 }
 
 func main(): void {

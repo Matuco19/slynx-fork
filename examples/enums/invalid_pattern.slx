@@ -1,7 +1,7 @@
 // xfail: a `matches` pattern must be a variant name or a variant call; a
 // binary-operator RHS is not a valid pattern and must be rejected.
 enum Result {
-    Ok(int),
+    Ok(sint32),
     Err(str)
 }
 

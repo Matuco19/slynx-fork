@@ -1,10 +1,10 @@
-// A nullable generic return type works: `identity<int>` is specialized to
-// `func(...) -> int?`.
+// A nullable generic return type works: `identity<sint32>` is specialized to
+// `func(...) -> sint32?`.
 import option using {Option};
 func identity<T>(x: T): Option<T> {
     Option.Some(x)
 }
 
-func main(): Option<int> {
-    identity<int>(42)
+func main(): Option<sint32> {
+    identity<sint32>(42)
 }

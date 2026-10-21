@@ -5,6 +5,6 @@ func identity<T>(x: T): T {
     x
 }
 
-func main(): int {
+func main(): sint32 {
     identity(42)
 }

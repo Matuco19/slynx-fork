@@ -11,7 +11,7 @@ component Box<T> {
 }
 
 component Main {
-    Box<WrapperFor<int>> {
+    Box<WrapperFor<sint32>> {
         item: WrapperFor(data:42)
     }
 }

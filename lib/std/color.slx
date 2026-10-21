@@ -1,7 +1,7 @@
 @intrinsic("color")
 pub object Color {
-	inner: int,
-	func new(r:int, g:int,b:int,a:int): Self {
+	inner: sint32,
+	func new(r:sint32, g:sint32,b:sint32,a:sint32): Self {
 	    r = r & 0xff;
 		g = g & 0xff;
 		b = b & 0xff;

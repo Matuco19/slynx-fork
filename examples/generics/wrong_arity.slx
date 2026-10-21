@@ -4,6 +4,6 @@ func second<T, U>(first: T, second: U): U {
     second
 }
 
-func main(): int {
-    second<int>(1, 2)
+func main(): sint32 {
+    second<sint32>(1, 2)
 }

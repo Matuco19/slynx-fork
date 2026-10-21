@@ -4,7 +4,7 @@ component Box<T> {
 }
 
 component Main {
-    Box<Option<int>> {
+    Box<Option<sint32>> {
         item: 42
     }
 }

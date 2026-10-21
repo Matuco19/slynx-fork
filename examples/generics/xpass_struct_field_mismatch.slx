@@ -8,8 +8,8 @@ object Box<T> {
 }
 
 func main(): void {
-    let a = Box<int>(data: 30.0);   // float literal → T = int
-    let b = Box<int>(data: true);   // bool literal → T = int
-    let c = Box<[]int>(data: 30.0); // float literal → T = []int
-    let d = Box<bool>(data: 1);     // int literal → T = bool
+    let a = Box<sint32>(data: 30.0);   // float literal → T = sint32
+    let b = Box<sint32>(data: true);   // bool literal → T = sint32
+    let c = Box<[]sint32>(data: 30.0); // float literal → T = []sint32
+    let d = Box<bool>(data: 1);        // integer literal → T = bool
 }

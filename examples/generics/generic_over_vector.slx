@@ -1,9 +1,9 @@
-// A generic function over a vector parameter works: `len<int>` is specialized
-// with `[]int` and the vector literal unifies with it.
-func len<T>(items: []T): int {
+// A generic function over a vector parameter works: `len<sint32>` is specialized
+// with `[]sint32` and the vector literal unifies with it.
+func len<T>(items: []T): sint32 {
     2
 }
 
-func main(): int {
-    len<int>({1,2,3})
+func main(): sint32 {
+    len<sint32>({1,2,3})
 }

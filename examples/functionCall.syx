@@ -1,9 +1,9 @@
 object Person {
 	name: str,
-	age: int,
+	age: sint32,
 }
 
-func person(name: str, age:int): Person {
+func person(name: str, age:sint32): Person {
 	Person(name: name, age: age)
 }
 

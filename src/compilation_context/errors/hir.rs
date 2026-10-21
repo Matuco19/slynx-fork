@@ -55,6 +55,12 @@ impl SlynxContext {
                 "Invalid deref, value being dereferenced is not a reference(mutable or immutable)"
                     .to_string()
             }
+            HIRErrorKind::InvalidUnaryExpression { ty } => {
+                format!(
+                    "Cannot apply unary '-' to type '{}'",
+                    hir.view(*ty).pretty_name()
+                )
+            }
             HIRErrorKind::ArrayLengthMismatch { expected, actual } => {
                 format!(
                     "Array length mismatch: expected {}, got {}",

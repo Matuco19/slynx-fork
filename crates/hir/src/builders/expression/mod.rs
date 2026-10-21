@@ -303,11 +303,24 @@ impl ExpressionBuilder {
                 },
             )?,
             ASTExpression::Binary { lhs, op, rhs } => {
+                // The enclosing expected type describes the result of the
+                // binary expression, not necessarily its operands. Comparisons
+                // return `bool` but compare values of a shared type, so their
+                // operands must not inherit the boolean hint. Boolean operators
+                // do have boolean operands; arithmetic and bitwise operators
+                // share their type with the result.
+                let operand_expected = if op.is_comparison() {
+                    None
+                } else if op.is_boolean_operator() {
+                    Some(queue.hir.types.create_type(Term::boolean_type()))
+                } else {
+                    expected
+                };
                 let lhs = self.build_expression(
                     queue,
                     ExpressionDescriptor {
                         target: *lhs,
-                        expected,
+                        expected: operand_expected,
                         context,
                     },
                 )?;
@@ -315,7 +328,7 @@ impl ExpressionBuilder {
                     queue,
                     ExpressionDescriptor {
                         target: *rhs,
-                        expected,
+                        expected: operand_expected,
                         context,
                     },
                 )?;

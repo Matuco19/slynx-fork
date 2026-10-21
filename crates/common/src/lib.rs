@@ -45,15 +45,24 @@ pub enum Operator {
 
 impl Operator {
     pub fn is_logical(&self) -> bool {
+        self.is_comparison() || self.is_boolean_operator()
+    }
+
+    /// Operators whose result is a boolean but whose operands share the
+    /// compared type (`==`, `<`, `>=`, ...).
+    pub fn is_comparison(&self) -> bool {
         matches!(
             self,
-            Self::LogicAnd
-                | Self::LogicOr
-                | Self::Equals
+            Self::Equals
                 | Self::GreaterThan
                 | Self::GreaterThanOrEqual
                 | Self::LessThan
                 | Self::LessThanOrEqual
         )
+    }
+
+    /// Operators whose operands are booleans (`&&`, `||`).
+    pub fn is_boolean_operator(&self) -> bool {
+        matches!(self, Self::LogicAnd | Self::LogicOr)
     }
 }

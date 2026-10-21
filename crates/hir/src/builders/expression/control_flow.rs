@@ -36,18 +36,18 @@ impl ExpressionBuilder {
             body,
             else_body,
             span,
-            expected,
             context,
+            ..
         } = descriptor;
+        let bool_ty = queue.hir.types.create_type(Term::boolean_type());
         let condition = self.build_expression(
             queue,
             ExpressionDescriptor {
                 target: condition,
-                expected,
+                expected: Some(bool_ty),
                 context,
             },
         )?;
-        let bool_ty = queue.hir.types.create_type(Term::boolean_type());
         self.unify_terms(queue, queue.hir[condition.data].ty.term, bool_ty, span)?;
 
         let then_branch = body

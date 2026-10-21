@@ -1,0 +1,13 @@
+// xfail: generic function call arguments are checked against the callee's
+// parameter types and rejected on a mismatch.
+func identity<T>(x: T): T {
+    x
+}
+
+func main(): void {
+    identity<sint8>(300);   // integer literal → T = sint8
+    identity<bool>(44);   // integer literal → T = bool
+    identity<bool>(1);        // integer literal → T = bool
+    identity<[]sint32>(300.0); // float literal → T = []sint32
+    identity<[]f64>(1);       // integer literal → T = []f64
+}

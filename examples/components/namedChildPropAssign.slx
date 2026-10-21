@@ -1,4 +1,5 @@
-// xpass: writing the property of a child is possible, later it will must be able to emit the update for all the dependants of it
+// Writing and reading a child's property through parent methods works.
+// Emitting updates for the property's dependants is not modelled yet.
 component Inner {
     pub prop value: sint32 = 0;
 }

@@ -1,0 +1,4 @@
+// An in-range literal initializes a uint8 variable. Expected range: 0..=255.
+func main(): void {
+    let value: uint8 = 255;
+}

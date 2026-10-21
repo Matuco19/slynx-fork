@@ -1,0 +1,23 @@
+// Every signed width from 0 to 255 bits is accepted by the type parser.
+// The values below fit their declared width.
+func s0(): sint0 { 0 }
+func s1(): sint1 { 1 }
+func s7(): sint7 { 63 }
+func s8(): sint8 { 127 }
+func s16(): sint16 { 32767 }
+func s32(): sint32 { 2147483647 }
+func s64(): sint64 { 1 }
+func s127(): sint127 { 1 }
+func s255(): sint255 { 1 }
+
+func main(): void {
+    let a = s0();
+    let b = s1();
+    let c = s7();
+    let d = s8();
+    let e = s16();
+    let f = s32();
+    let g = s64();
+    let h = s127();
+    let i = s255();
+}

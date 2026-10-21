@@ -1,0 +1,4 @@
+// xfail: 192 is out of range for sint7 (-64..=63) and is rejected as an out-of-range literal.
+func main(): void {
+    let value: sint7 = 192;
+}

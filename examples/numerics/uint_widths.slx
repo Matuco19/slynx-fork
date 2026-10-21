@@ -1,0 +1,24 @@
+// Every unsigned width from 0 to 255 bits is accepted by the type parser.
+// The values below fit their declared width. Note that the literal lexer only
+// holds 32 signed bits, so 4294967295 cannot be written as a uint32 literal.
+func u0(): uint0 { 0 }
+func u1(): uint1 { 1 }
+func u7(): uint7 { 127 }
+func u8(): uint8 { 255 }
+func u16(): uint16 { 65535 }
+func u32(): uint32 { 2147483647 }
+func u64(): uint64 { 1 }
+func u127(): uint127 { 1 }
+func u255(): uint255 { 1 }
+
+func main(): void {
+    let a = u0();
+    let b = u1();
+    let c = u7();
+    let d = u8();
+    let e = u16();
+    let f = u32();
+    let g = u64();
+    let h = u127();
+    let i = u255();
+}

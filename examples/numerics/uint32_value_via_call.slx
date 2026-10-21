@@ -1,0 +1,8 @@
+// A uint32 value is produced by a function whose declared return type is
+// uint32. Integer literals themselves are sint32, so a direct
+// `let value: uint32 = 42;` is rejected today (see uint32_literal_assignment).
+func answer(): uint32 { 42 }
+
+func main(): void {
+    let value: uint32 = answer();
+}

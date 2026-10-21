@@ -1,0 +1,5 @@
+// xfail: -1 is out of range for uint32 (0..=4294967295). It is rejected today,
+// but while parsing, because unary minus is not supported by the language yet.
+func main(): void {
+    let value: uint32 = -1;
+}

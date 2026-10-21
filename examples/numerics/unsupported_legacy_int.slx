@@ -1,0 +1,2 @@
+// xfail: the legacy int type was removed in favour of sint32.
+func main(): int { 1 }

@@ -1,0 +1,7 @@
+// xpass: 2 is out of range for uint1 (0..=1) but return expressions are not
+// checked against the declared return type yet.
+func overflow(): uint1 { 2 }
+
+func main(): void {
+    let value = overflow();
+}

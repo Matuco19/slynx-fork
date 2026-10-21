@@ -1,0 +1,6 @@
+// xfail: 2147483648 does not fit in sint32 (-2147483648..=2147483647). The
+// literal lexer only holds 32 signed bits, so it is rejected before any check
+// against the annotated type can happen.
+func main(): void {
+    let value: sint32 = 2147483648;
+}

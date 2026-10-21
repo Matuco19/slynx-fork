@@ -1,0 +1,2 @@
+// xfail: only a plain decimal width is accepted; uint32bits is not a type name.
+func main(): uint32bits { 1 }

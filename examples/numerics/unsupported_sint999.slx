@@ -1,0 +1,3 @@
+// xfail: bit widths are parsed as a u8, so a three-digit width like sint999 is
+// rejected.
+func main(): sint999 { 1 }

@@ -1,0 +1,4 @@
+// An in-range literal initializes a sint7 variable. Expected range: -64..=63.
+func main(): void {
+    let value: sint7 = 63;
+}

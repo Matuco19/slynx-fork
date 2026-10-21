@@ -1,0 +1,7 @@
+// In-range signed 8-bit value obtained from a function whose return type is
+// sint8. 127 is the largest value that fits.
+func max_signed_byte(): sint8 { 127 }
+
+func main(): void {
+    let value: sint8 = max_signed_byte();
+}

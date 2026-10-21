@@ -1,0 +1,2 @@
+// xfail: only a plain decimal width is accepted; sint32bits is not a type name.
+func main(): sint32bits { 1 }

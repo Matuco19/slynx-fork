@@ -5,7 +5,7 @@ component Box<T> {
 
 component Main {
     Box<Option<sint32>> {
-        item: 42
+        item: Option.Some(42)
     }
 }
 

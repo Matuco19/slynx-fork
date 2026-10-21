@@ -1,0 +1,16 @@
+// xfail: generic component property values are checked against the property type in the HIR builder
+component Pair<T, U> {
+    pub prop first: T;
+    pub prop second: U;
+}
+
+component Main {
+    Pair<bool, str> {
+        first: 30, // float literal → T = sint32
+        second: 1,   // integer literal → U = bool
+    }
+}
+
+func main(): Component {
+    Main {}
+}

@@ -1,0 +1,3 @@
+// xfail: a signed integer type requires an explicit bit width; bare sint is not
+// a type name.
+func main(): sint { 1 }

@@ -355,6 +355,77 @@ fn comparison_operator_still_parses() {
 }
 
 #[test]
+fn unary_minus_binds_tighter_than_multiplication() {
+    let (program, symbols, _, statements, expressions) = parse_program(
+        "func main(): int {
+            let a: int = -x * y;
+            let b: int = x * -y;
+            let c: int = --x;
+        }",
+    );
+
+    let func: &FuncDeclaration = program.get_pool().get(PoolId::new(0));
+
+    let ASTStatement::Var { rhs, .. } = &statements[func.body[0].data] else {
+        panic!("expected a variable declaration");
+    };
+    let ASTExpression::Binary {
+        op,
+        lhs,
+        rhs: product_rhs,
+    } = &expressions[rhs.data]
+    else {
+        panic!("expected a multiplicative expression");
+    };
+    assert_eq!(*op, Operator::Star);
+    let ASTExpression::Negate(target) = &expressions[lhs.data] else {
+        panic!("expected the left operand to be negated");
+    };
+    let ASTExpression::Identifier(name) = &expressions[target.data] else {
+        panic!("expected the negation target to be an identifier");
+    };
+    assert_eq!(*name, symbols.intern("x"));
+    let ASTExpression::Identifier(name) = &expressions[product_rhs.data] else {
+        panic!("expected the right operand to be an identifier");
+    };
+    assert_eq!(*name, symbols.intern("y"));
+
+    let ASTStatement::Var { rhs, .. } = &statements[func.body[1].data] else {
+        panic!("expected a variable declaration");
+    };
+    let ASTExpression::Binary {
+        op,
+        rhs: product_rhs,
+        ..
+    } = &expressions[rhs.data]
+    else {
+        panic!("expected a multiplicative expression");
+    };
+    assert_eq!(*op, Operator::Star);
+    let ASTExpression::Negate(target) = &expressions[product_rhs.data] else {
+        panic!("expected the right operand to be negated");
+    };
+    let ASTExpression::Identifier(name) = &expressions[target.data] else {
+        panic!("expected the negation target to be an identifier");
+    };
+    assert_eq!(*name, symbols.intern("y"));
+
+    let ASTStatement::Var { rhs, .. } = &statements[func.body[2].data] else {
+        panic!("expected a variable declaration");
+    };
+    let ASTExpression::Negate(inner) = &expressions[rhs.data] else {
+        panic!("expected a chained negation");
+    };
+    let ASTExpression::Negate(inner) = &expressions[inner.data] else {
+        panic!("expected the inner expression to be negated");
+    };
+    let ASTExpression::Identifier(name) = &expressions[inner.data] else {
+        panic!("expected the innermost negation target to be an identifier");
+    };
+    assert_eq!(*name, symbols.intern("x"));
+}
+
+#[test]
 fn right_shift_parses_without_panicking() {
     // `>>` is not a single lexer token: the parser must recognise it as two
     // consecutive `>` tokens instead of falling into an unreachable!().

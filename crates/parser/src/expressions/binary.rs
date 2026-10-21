@@ -42,7 +42,23 @@ impl<'a> Parser<'a> {
         Ok(current)
     }
 
-    /// Parses multiplicative expressions, which consist of primary expressions combined with multiplication '*' or division '/' operators. It handles operator precedence by first parsing the left-hand side (LHS) as a primary expression, and then repeatedly checking for multiplicative operators and parsing the right-hand side (RHS) as another primary expression until no more multiplicative operators are found.
+    /// Parses unary expressions. The only unary operator handled here is arithmetic negation (`-`), which binds tighter than multiplication and division and can be chained
+    pub fn parse_unary(
+        &mut self,
+        type_params: &[SymbolPointer],
+        flags: ParserFlags,
+    ) -> Result<Spanned<DedupPoolId<ASTExpression>>> {
+        if self.peek()?.kind != TokenKind::Sub {
+            return self.parse_primary(type_params, flags);
+        }
+
+        let start = self.eat()?.span;
+        let expr = self.parse_unary(type_params, flags)?;
+        let id = self.intern_expression(ASTExpression::Negate(expr));
+        Ok(start.merge_with(expr.span).make_spanned(id))
+    }
+
+    /// Parses multiplicative expressions, which consist of unary expressions combined with multiplication '*' or division '/' operators. It handles operator precedence by first parsing the left-hand side (LHS) as a unary expression, and then repeatedly checking for multiplicative operators and parsing the right-hand side (RHS) as another unary expression until no more multiplicative operators are found.
     pub fn parse_multiplicative(
         &mut self,
         type_params: &[SymbolPointer],
@@ -50,8 +66,8 @@ impl<'a> Parser<'a> {
     ) -> Result<Spanned<DedupPoolId<ASTExpression>>> {
         self.parse_infix(
             type_params,
-            |parser, tps| parser.parse_primary(tps, flags),
-            |parser, tps| parser.parse_primary(tps, flags),
+            |parser, tps| parser.parse_unary(tps, flags),
+            |parser, tps| parser.parse_unary(tps, flags),
             |parser| {
                 let op = match parser.peek()?.kind {
                     TokenKind::Star => Operator::Star,

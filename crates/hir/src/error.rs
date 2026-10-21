@@ -1,8 +1,6 @@
-use std::{backtrace::Backtrace, fs::File};
+use std::backtrace::Backtrace;
 
-use crate::{
-    ComponentId, SymbolPointer, helpers::IntegerTypeInfo, model::HirExpression, term::TermId,
-};
+use crate::{ComponentId, SymbolPointer, model::HirExpression, term::TermId};
 
 use common::Span;
 use module_loader::FileId;
@@ -59,7 +57,7 @@ pub enum ExpectedTypeUsage {
 pub enum HIRErrorKind {
     IntegerOutOfBounds {
         value: i64,
-        numeric: IntegerTypeInfo,
+        numeric: TermId,
         min: i128,
         max: i128,
     },
@@ -291,7 +289,7 @@ impl HIRError {
     pub fn integer_out_of_bounds(
         file: FileId,
         value: i64,
-        numeric_info: IntegerTypeInfo,
+        numeric_info: TermId,
         min: i128,
         max: i128,
         span: Span,

@@ -16,7 +16,7 @@ impl SlynxContext {
     fn hir_error_to_string(&self, hir: &SlynxHir, err: &HIRError) -> String {
         match &err.kind {
             HIRErrorKind::IntegerOutOfBounds { value, numeric, min, max } => {
-                format!("Number {value} is out of bounds for a integer with {} bit size. Write it in bounds of {min} to {max}", numeric.bit_length)
+                format!("Number {value} is out of bounds for integer type '{}'. Write it in bounds of {min} to {max}", hir.view(*numeric).pretty_name())
             }
             HIRErrorKind::MissingExtensionMethod { method } => {
                 format!("Method '{}' not found but requested by interface", hir.get_name(*method))

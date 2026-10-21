@@ -161,24 +161,25 @@ impl ExpressionBuilder {
             } - 1;
             (min, max)
         };
+        let hir_type = queue.hir.types.create_type(if numeric_info.signed {
+            Term::signed_integer_type(numeric_info.bit_length)
+        } else {
+            Term::unsigned_integer_type(numeric_info.bit_length)
+        });
         {
             let value128 = value as i128;
             if value128 < min || value128 > max {
                 return Err(HIRError::integer_out_of_bounds(
                     self.file(),
                     value as i64,
-                    numeric_info,
+                    hir_type,
                     min,
                     max,
                     span,
                 ));
             }
         }
-        let hir_type = queue.hir.types.create_type(if numeric_info.signed {
-            Term::signed_integer_type(numeric_info.bit_length)
-        } else {
-            Term::unsigned_integer_type(numeric_info.bit_length)
-        });
+
         Ok(queue
             .hir
             .create_int_expression(self.file(), value, hir_type))

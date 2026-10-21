@@ -137,10 +137,13 @@ impl ExpressionBuilder {
         span: Span,
     ) -> Result<HirExpression> {
         let numeric_info = if let Some(expected) = expected {
-            let Some(integer_info) = queue.hir.view(expected).is_integer() else {
+            if queue.hir.view(expected).is_generic().is_some() {
+                IntegerTypeInfo::default()
+            } else if let Some(integer_info) = queue.hir.view(expected).is_integer() {
+                integer_info
+            } else {
                 return Err(HIRError::expected_integer_type(self.file(), expected, span));
-            };
-            integer_info
+            }
         } else {
             IntegerTypeInfo::default()
         };

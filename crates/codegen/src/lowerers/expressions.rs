@@ -27,6 +27,7 @@ impl<'a> LoweringState<'a> {
             span,
             context.file(),
         ))?;
+        //fix: update enum view to contain the type representation, so it can be used instead of raw sint32
         let variant_info = enum_view.variants().get(variant).ok_or(CodegenError::new(
             CodegenErrorKind::InvalidVariantIndex(key, variant),
             span,
@@ -35,7 +36,7 @@ impl<'a> LoweringState<'a> {
 
         let layout = self.types.enum_layout(&key, span, context.file())?.clone();
 
-        let int_type = context.ir().types.int_type();
+        let int_type = context.ir().types.int_type(32);
         let tag = context.emit_const(Operand::Int(variant_info.discriminant as i64), int_type);
 
         let mut operands = Vec::with_capacity(2);
@@ -273,8 +274,8 @@ impl<'a> LoweringState<'a> {
             let ir = context.ir();
             (
                 ir.types.bool_type(),
-                ir.types.float_type(),
-                ir.types.int_type(),
+                ir.types.f32_type(),
+                ir.types.int_type(32),
             )
         };
         let expression = &self.hir[expr.data];
@@ -438,7 +439,7 @@ impl<'a> LoweringState<'a> {
         let then_label = ctx.create_label("matches_then");
         let end_label = ctx.create_label("matches_end");
 
-        let int_type = ctx.ir().types.int_type();
+        let int_type = ctx.ir().types.int_type(32);
         let bool_type = ctx.ir().types.bool_type();
 
         let false_value = ctx.emit_const(Operand::Bool(false), bool_type);

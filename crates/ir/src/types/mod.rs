@@ -15,26 +15,6 @@ pub use unions::*;
 
 use crate::SymbolPointer;
 
-pub const BUILTIN_TYPES: &[IRType] = &[
-    IRType::I8,
-    IRType::U8,
-    IRType::I16,
-    IRType::U16,
-    IRType::I32,
-    IRType::U32,
-    IRType::I64,
-    IRType::U64,
-    IRType::ISIZE,
-    IRType::USIZE,
-    IRType::F32,
-    IRType::F64,
-    IRType::STR,
-    IRType::BOOL,
-    IRType::VOID,
-    IRType::GenericComponent,
-    IRType::Specialized(IRSpecializedComponentType::Div),
-    IRType::Specialized(IRSpecializedComponentType::Text),
-];
 pub type IRTypeId = DedupPoolId<IRType>;
 #[derive(Debug)]
 pub struct IRTypes {
@@ -54,9 +34,7 @@ impl std::default::Default for IRTypes {
 impl IRTypes {
     pub fn new() -> Self {
         let types = DedupPool::new();
-        for builtin in BUILTIN_TYPES {
-            types.insert(*builtin);
-        }
+
         Self {
             types,
             structs: DedupPool::new(),
@@ -143,14 +121,29 @@ impl IRTypes {
         self.insert_type(ty)
     }
 
-    ///Returns the int type
-    pub fn int_type(&self) -> IRTypeId {
-        self.insert_type(IRType::I32)
+    ///Returns the int type with the given `len` of bits
+    pub fn int_type(&self, len: u8) -> IRTypeId {
+        self.insert_type(IRType::I(len))
     }
 
-    ///Returns the float type
-    pub fn float_type(&self) -> IRTypeId {
+    ///Returns the unsigned int type with the given `len` of bits
+    pub fn uint_type(&self, len: u8) -> IRTypeId {
+        self.insert_type(IRType::U(len))
+    }
+
+    ///Returns the f32 type
+    pub fn f32_type(&self) -> IRTypeId {
         self.insert_type(IRType::F32)
+    }
+
+    ///Returns the f64 type
+    pub fn f64_type(&self) -> IRTypeId {
+        self.insert_type(IRType::F64)
+    }
+
+    ///Returns the f64 type
+    pub fn f16_type(&self) -> IRTypeId {
+        self.insert_type(IRType::F16)
     }
 
     ///Returns the bool type
@@ -216,10 +209,11 @@ impl IRTypes {
     ///variants. Unknown/aggregate types conservatively report pointer size.
     pub(crate) fn type_size(&self, ty: IRTypeId) -> usize {
         match self.types.get(ty) {
-            IRType::I8 | IRType::U8 | IRType::BOOL => 1,
-            IRType::I16 | IRType::U16 => 2,
-            IRType::I32 | IRType::U32 | IRType::F32 => 4,
-            IRType::I64 | IRType::U64 | IRType::ISIZE | IRType::USIZE | IRType::F64 => 8,
+            IRType::I(n) | IRType::U(n) => *n as usize,
+            IRType::BOOL => 1,
+            IRType::F16 => 2,
+            IRType::F32 => 4,
+            IRType::ISIZE | IRType::USIZE | IRType::F64 => 8,
             IRType::Pointer(_) => 8,
             IRType::Array(inner, len) => self.type_size(*inner) * len,
             //Aggregate/unknown types conservatively report pointer size.

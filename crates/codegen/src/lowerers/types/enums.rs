@@ -89,7 +89,7 @@ impl<'a> TypeLowerer<'a> {
                 file,
             ))?;
         let enum_name = self.hir.get_name(enum_view.name());
-        let int_type = ir.types.int_type();
+        let int_type = ir.types.int_type(32);
 
         let has_payload = enum_view
             .variants()

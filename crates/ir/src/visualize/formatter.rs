@@ -54,14 +54,9 @@ impl<'a> Formatter<'a> {
 
     fn fmt_type(&self, ty: &IRType) -> String {
         match ty {
-            IRType::I8 => "i8".to_string(),
-            IRType::U8 => "u8".to_string(),
-            IRType::I16 => "i16".to_string(),
-            IRType::U16 => "u16".to_string(),
-            IRType::I32 => "i32".to_string(),
-            IRType::U32 => "u32".to_string(),
-            IRType::I64 => "i64".to_string(),
-            IRType::U64 => "u64".to_string(),
+            IRType::I(n) => format!("i{n}"),
+            IRType::U(n) => format!("u{n}"),
+            IRType::F16 => "f16".to_string(),
             IRType::F32 => "f32".to_string(),
             IRType::F64 => "f64".to_string(),
             IRType::BOOL => "bool".to_string(),

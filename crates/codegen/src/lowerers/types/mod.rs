@@ -85,12 +85,14 @@ impl<'a> TypeLowerer<'a> {
         let deref = self.hir.view(ty).nominal();
         let nominal = deref.data();
         let out = match deref.raw().node() {
-            TermNode::Primitive(PrimitiveType::Signed { .. }) => ir.types.int_type(),
             TermNode::Primitive(PrimitiveType::Unsigned { bitsize: 1 }) => ir.types.bool_type(),
-            TermNode::Primitive(PrimitiveType::Unsigned { .. }) => ir.types.int_type(),
-            TermNode::Primitive(PrimitiveType::Float32 | PrimitiveType::Float64) => {
-                ir.types.float_type()
+            TermNode::Primitive(PrimitiveType::Signed { bitsize }) => ir.types.int_type(*bitsize),
+            TermNode::Primitive(PrimitiveType::Unsigned { bitsize }) => {
+                ir.types.uint_type(*bitsize)
             }
+            TermNode::Primitive(PrimitiveType::Float32) => ir.types.f32_type(),
+            TermNode::Primitive(PrimitiveType::Float64) => ir.types.f64_type(),
+
             TermNode::Primitive(PrimitiveType::Void) => ir.types.void_type(),
             TermNode::Primitive(PrimitiveType::String) => ir.types.str_type(),
             TermNode::Var(_) => ir.types.generic_component_type(),

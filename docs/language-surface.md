@@ -311,6 +311,7 @@ The current surface includes:
 - component expressions;
 - field access;
 - binary expressions;
+- unary negation `-expr`;
 - `if` expressions;
 - `matches` expressions (see
   [features/matches-expression.md](features/matches-expression.md));
@@ -373,6 +374,21 @@ Examples already covered by the codebase include:
 Note: `>>` (right shift) is not currently a token in the lexer. It was removed
 because of a conflict with generic syntax: `A<B>>` in expression context was
 being parsed as a `>>`. Generic instantiation uses `>` instead.
+
+### Unary Negation
+
+Prefix `-` negates signed integers and floats. It binds tighter than `*` and
+`/` and can be chained.
+
+```slynx
+func negate(value: int): int -> -value;
+
+func main(): int {
+    let literal = -5;
+    let result = negate(-literal);
+    -result
+}
+```
 
 ### If Expressions
 

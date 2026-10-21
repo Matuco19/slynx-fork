@@ -113,16 +113,27 @@ impl ExpressionBuilder {
                 .collect::<Result<Vec<_>>>()?,
         );
         let args = {
+            // A method's signature includes the receiver as its first argument,
+            // while `arguments` only holds the explicit call arguments. The
+            // receiver lives in `prepended_arguments`, so the parameters have to
+            // be split at the same position to pair every argument with the
+            // parameter it actually corresponds to.
+            let (prepended_expected, explicit_expected) =
+                expected_args.split_at(prepended_arguments.len());
+
+            for (arg, ty) in prepended_arguments.iter().zip(prepended_expected) {
+                let expr_ty = queue.hir.view(arg.data).ty();
+                self.unify_terms(queue, expr_ty.term, *ty, span)?;
+            }
+
             let transformed_arguments = arguments
                 .iter()
-                .zip(expected_args)
+                .zip(explicit_expected)
                 .map(|(arg, ty)| {
-                    let expected_ty = queue
-                        .hir
-                        .view(*ty)
-                        .raw()
-                        .is_var_type()
-                        .and_then(|var| generics.get(var.index as usize));
+                    let expected_ty = match queue.hir.view(*ty).raw().is_var_type() {
+                        Some(var) => generics.get(var.index as usize),
+                        None => Some(*ty),
+                    };
 
                     let expr = self.build_expression(
                         queue,

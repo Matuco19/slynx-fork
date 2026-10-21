@@ -120,12 +120,10 @@ impl ExpressionBuilder {
                 {
                     let declared_type = comp_view.props()[position].ty;
 
-                    let expected_ty = queue
-                        .hir
-                        .view(declared_type)
-                        .raw()
-                        .is_var_type()
-                        .and_then(|var| generics.get(var.index as usize));
+                    let expected_ty = match queue.hir.view(declared_type).raw().is_var_type() {
+                        Some(var) => generics.get(var.index as usize),
+                        None => Some(declared_type),
+                    };
                     let expr = self.build_expression(
                         queue,
                         ExpressionDescriptor {

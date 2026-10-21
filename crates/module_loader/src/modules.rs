@@ -70,8 +70,8 @@ impl<'a> Modules<'a> {
             {
                 Some(ASTBuiltin::Uint(value))
             }
-            name if name.len() > 3
-                && let ("sint", quantity) = name.split_at(3)
+            name if name.len() > 4
+                && let ("sint", quantity) = name.split_at(4)
                 && let Ok(value) = quantity.parse::<u8>() =>
             {
                 Some(ASTBuiltin::Int(value))

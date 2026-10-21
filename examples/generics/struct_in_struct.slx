@@ -6,7 +6,7 @@ object Outer<T> {
     inner: Inner<T>
 }
 
-func main(): int {
-    let o = Outer<int>(inner: Inner<int>(v: 42));
+func main(): sint32 {
+    let o = Outer<sint32>(inner: Inner<sint32>(v: 42));
     o.inner.v
 }

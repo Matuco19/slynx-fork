@@ -4,13 +4,13 @@ func main(): void {
 }
 
 pub object Counter {
-    value: int,
+    value: sint32,
 
     func new(): Self {
         Self(value: 0)
     }
 
-    func increment(&mut self, amount: int): void {
+    func increment(&mut self, amount: sint32): void {
         self.value = self.value + amount;
     }
 }

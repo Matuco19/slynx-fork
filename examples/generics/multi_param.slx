@@ -2,7 +2,7 @@ func second<T, U>(first: T, second: U): U {
     second
 }
 
-func main(): int {
-    let result = second<bool, int>(true, 20);
+func main(): sint32 {
+    let result = second<bool, sint32>(true, 20);
     result
 }

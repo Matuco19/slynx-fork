@@ -1,11 +1,11 @@
 object StyleContext {
-    paint: int,
+    paint: sint32,
 }
 
 object DrawingContext {
-    scale: int,
+    scale: sint32,
 
-    func render(&self, text: str, paint: int): void {
+    func render(&self, text: str, paint: sint32): void {
     }
 }
 
@@ -13,7 +13,7 @@ component Text {
     prop text: str;
     prop style: StyleContext;
 
-    func onMount(scene: int): void {
+    func onMount(scene: sint32): void {
     }
 
     func render(&self, context: DrawingContext): void {

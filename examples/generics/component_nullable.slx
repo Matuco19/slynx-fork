@@ -4,8 +4,8 @@ component Box<T> {
 }
 
 component Main {
-    Box<Option<int>> {
-        item: 42
+    Box<Option<sint32>> {
+        item: Option.Some(42)
     }
 }
 

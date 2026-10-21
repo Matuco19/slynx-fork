@@ -1,10 +1,10 @@
 enum Name {
-    A(int),
+    A(sint32),
     B(str),
-    C(int, str, f64)
+    C(sint32, str, f64)
 }
 
-func main(): int {
+func main(): sint32 {
     let a = Name.A(1);
     let b = Name.B("s");
     let c = Name.C(1, "s", 2.5);

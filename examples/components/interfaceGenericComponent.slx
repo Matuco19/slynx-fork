@@ -1,23 +1,23 @@
 // xfail: a bounded generic whose bound is an interface cannot be satisfied by a
 // generic component. The component declares the interface's method, but the
-// specialization `Box<int>` is not registered as an implementor, so the call
+// specialization `Box<sint32>` is not registered as an implementor, so the call
 // fails with `HIR Error: Type 'Box<sint32>' has no implementation of the
 // interface method`. The same pattern over a plain object works — see
 // examples/interfaces/bounded_generic.slx.
 interface Sized {
-    pub func size(&self): int;
+    pub func size(&self): sint32;
 }
 
 component Box<T> {
     pub prop item: T;
 
-    pub func size(&self): int {
+    pub func size(&self): sint32 {
         1
     }
 }
 
-func total<S>(x: S): int where S: Sized -> x.size();
+func total<S>(x: S): sint32 where S: Sized -> x.size();
 
-func main(): int {
-    total(Box<int> { item: 1 })
+func main(): sint32 {
+    total(Box<sint32> { item: 1 })
 }

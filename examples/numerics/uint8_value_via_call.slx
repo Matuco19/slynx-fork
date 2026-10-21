@@ -1,0 +1,7 @@
+// In-range unsigned 8-bit value obtained from a function whose return type is
+// uint8. 255 is the largest value that fits.
+func max_byte(): uint8 { 255 }
+
+func main(): void {
+    let value: uint8 = max_byte();
+}

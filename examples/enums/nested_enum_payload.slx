@@ -1,7 +1,7 @@
 // An enum whose payload references another enum must resolve the nested enum's
 // flat layout through the on-demand branch of `get_or_create_ir_type`.
 enum Inner {
-    Value(int),
+    Value(sint32),
     Empty
 }
 

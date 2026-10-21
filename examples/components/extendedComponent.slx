@@ -3,7 +3,7 @@ interface Stringifiable {
 }
 
 component Counter {
-    prop value: int;
+    prop value: sint32;
 }
 
 extend Counter: Stringifiable {

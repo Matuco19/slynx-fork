@@ -63,8 +63,6 @@ impl<'a> Modules<'a> {
             "f64" => Some(ASTBuiltin::F64),
             "str" => Some(ASTBuiltin::Str),
             "void" => Some(ASTBuiltin::Void),
-            "int" => Some(ASTBuiltin::Int(32)),
-            "uint" => Some(ASTBuiltin::Uint(32)),
             "Component" => Some(ASTBuiltin::AnyComponent),
             name if name.len() > 4
                 && let ("uint", quantity) = name.split_at(4)
@@ -72,8 +70,8 @@ impl<'a> Modules<'a> {
             {
                 Some(ASTBuiltin::Uint(value))
             }
-            name if name.len() > 3
-                && let ("int", quantity) = name.split_at(3)
+            name if name.len() > 4
+                && let ("sint", quantity) = name.split_at(4)
                 && let Ok(value) = quantity.parse::<u8>() =>
             {
                 Some(ASTBuiltin::Int(value))

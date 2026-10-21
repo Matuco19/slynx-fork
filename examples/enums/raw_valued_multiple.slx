@@ -4,7 +4,7 @@ enum Name {
     Two = 2
 }
 
-func main(): int {
+func main(): sint32 {
     let a = Name.Zero;
     let b = Name.Two;
     let c = Name.One;

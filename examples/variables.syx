@@ -1,8 +1,8 @@
 object Pessoa{
     name: str,
-    age: int
+    age: sint32
 }
-func p(a:int,b:int,c:int):int {
+func p(a:sint32,b:sint32,c:sint32):sint32 {
     let mut p = Pessoa(name: "John", age:10);
     p.age = 55;
     p = Pessoa(name: "Maria", age: p.age);

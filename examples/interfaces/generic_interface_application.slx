@@ -3,6 +3,6 @@ interface Stringifiable {
     func stringify(&self) -> str
 }
 
-extend int: Stringifiable<str> {}
+extend sint32: Stringifiable<str> {}
 
 func main(): void {}

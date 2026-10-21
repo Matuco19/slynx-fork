@@ -1,0 +1,4 @@
+// An in-range literal initializes a uint32 variable. Expected range: 0..=4294967295.
+func main(): void {
+    let value: uint32 = 1;
+}

@@ -110,7 +110,7 @@ interface Cloneable {
 }
 
 object Counter {
-    value: int
+    value: sint32
 }
 
 extend Counter: Cloneable {
@@ -140,7 +140,7 @@ interface Counter {
 }
 
 object Score {
-    value: int
+    value: sint32
 }
 
 extend Score: Counter {

@@ -1,0 +1,7 @@
+// In-range 32-bit signed values. The negative extreme is built with a
+// subtraction because the parser does not support unary minus.
+func main(): void {
+    let max: sint32 = 2147483647;
+    let min: sint32 = 0 - 2147483647;
+    let zero: sint32 = 0;
+}

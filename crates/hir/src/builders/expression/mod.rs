@@ -261,8 +261,15 @@ impl ExpressionBuilder {
             ASTExpression::False => self.build_bool(queue, false),
             ASTExpression::True => self.build_bool(queue, true),
             ASTExpression::Identifier(name) => self.build_identifier(queue, *name, target.span)?,
-            ASTExpression::IntLiteral(i) => self.build_int_literal(queue, *i),
-            ASTExpression::FloatLiteral(f) => self.build_float_literal(queue, f.into_inner()),
+            ASTExpression::IntLiteral(i) => {
+                self.build_int_literal(queue, *i, expected, target.span)?
+            }
+            ASTExpression::FloatLiteral(f) => queue.hir.create_float_expression(
+                self.file(),
+                f.into_inner(),
+                expected.unwrap_or(queue.hir.types.create_type(Term::float32_type())),
+                target.span,
+            )?,
             ASTExpression::StringLiteral(s) => self.build_str_literal(queue, *s),
             ASTExpression::Tuple(fields) => self.build_tuple_expression(
                 queue,
@@ -296,11 +303,24 @@ impl ExpressionBuilder {
                 },
             )?,
             ASTExpression::Binary { lhs, op, rhs } => {
+                // The enclosing expected type describes the result of the
+                // binary expression, not necessarily its operands. Comparisons
+                // return `bool` but compare values of a shared type, so their
+                // operands must not inherit the boolean hint. Boolean operators
+                // do have boolean operands; arithmetic and bitwise operators
+                // share their type with the result.
+                let operand_expected = if op.is_comparison() {
+                    None
+                } else if op.is_boolean_operator() {
+                    Some(queue.hir.types.create_type(Term::boolean_type()))
+                } else {
+                    expected
+                };
                 let lhs = self.build_expression(
                     queue,
                     ExpressionDescriptor {
                         target: *lhs,
-                        expected,
+                        expected: operand_expected,
                         context,
                     },
                 )?;
@@ -308,7 +328,7 @@ impl ExpressionBuilder {
                     queue,
                     ExpressionDescriptor {
                         target: *rhs,
-                        expected,
+                        expected: operand_expected,
                         context,
                     },
                 )?;

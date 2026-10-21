@@ -1,13 +1,13 @@
 component Counter {
-    pub prop value: int = 0;
+    pub prop value: sint32 = 0;
 }
 
 component CounterUsage {
     counter=Counter {}
-    pub func getCount(&self): int -> self.counter.value;
+    pub func getCount(&self): sint32 -> self.counter.value;
 }
 
-func main(): int {
+func main(): sint32 {
     let c=CounterUsage {};
     c.getCount()
 }

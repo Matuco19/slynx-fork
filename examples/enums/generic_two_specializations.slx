@@ -7,7 +7,7 @@ enum Thing<T> {
 }
 
 func main(): bool {
-    let a = Thing.Some(12);
+    let a: Thing<sint32> = Thing.Some(12);
     let b = Thing.Some("hi");
     true
 }

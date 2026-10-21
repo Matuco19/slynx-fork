@@ -1,15 +1,15 @@
 component Counter {
-    prop value: int;
+    prop value: sint32;
 
     func new(): Self {
         Self { value: 0 }
     }
 
-    func increment(&mut self, amount: int): void {
+    func increment(&mut self, amount: sint32): void {
         self.value = self.value + amount;
     }
 
-    func getValue(&self): int {
+    func getValue(&self): sint32 {
         self.value
     }
 }

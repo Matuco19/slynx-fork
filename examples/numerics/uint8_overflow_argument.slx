@@ -1,0 +1,6 @@
+// xfail: 256 is out of range for uint8 (0..=255) and is rejected at the call site.
+func take_byte(value: uint8): void {}
+
+func main(): void {
+    take_byte(256);
+}

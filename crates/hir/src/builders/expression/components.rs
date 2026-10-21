@@ -118,19 +118,12 @@ impl ExpressionBuilder {
                         .iter()
                         .position(|prop| prop.name == *prop_name) =>
                 {
-                    let declared = comp_view.props()[position].ty;
-                    // A parameter used directly as the property's type is the
-                    // one place inference can read a concrete argument from:
-                    // whatever the value expression turns out to be is the
-                    // argument. Property types that merely *mention* the
-                    // parameter (e.g. `Vec<T>`) are substituted but cannot
-                    // contribute, so those still need an explicit argument.
-                    let expected_ty = queue
-                        .hir
-                        .view(declared)
-                        .raw()
-                        .is_var_type()
-                        .and_then(|var| generics.get(var.index as usize));
+                    let declared_type = comp_view.props()[position].ty;
+
+                    let expected_ty = match queue.hir.view(declared_type).raw().is_var_type() {
+                        Some(var) => generics.get(var.index as usize),
+                        None => Some(declared_type),
+                    };
                     let expr = self.build_expression(
                         queue,
                         ExpressionDescriptor {
@@ -139,7 +132,13 @@ impl ExpressionBuilder {
                             context,
                         },
                     )?;
-                    if let Some(var) = queue.hir.view(declared).raw().is_var_type() {
+                    self.unify_terms(
+                        queue,
+                        queue.hir.view(expr.data).ty().term,
+                        declared_type,
+                        span,
+                    )?;
+                    if let Some(var) = queue.hir.view(declared_type).raw().is_var_type() {
                         generics.try_set(var.index as usize, queue.hir.view(expr.data).ty().term);
                     }
                     properties.push(PropertyExpression::new(position, expr));

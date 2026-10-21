@@ -3,13 +3,13 @@
 // body forms, and a method writing its own prop through `&mut self`. If any one
 // of these regresses this file stops compiling.
 component Money {
-    pub prop cents: int = 0;
+    pub prop cents: sint32 = 0;
 }
 
 component Cell<T> {
     pub prop value: T;
 
-    pub func asInt(&self): int {
+    pub func asInt(&self): sint32 {
         1
     }
 }
@@ -17,29 +17,29 @@ component Cell<T> {
 component Row {
     amount=Money { cents: 250 }
 
-    first=Cell<int> { value: 1 }
-    second=Cell<int> { value: 2 }
+    first=Cell<sint32> { value: 1 }
+    second=Cell<sint32> { value: 2 }
 
-    pub func count(&self): int {
+    pub func count(&self): sint32 {
         self.first.asInt() + self.second.asInt()
     }
 
-    pub func total(&self): int -> self.amount.cents;
+    pub func total(&self): sint32 -> self.amount.cents;
 }
 
 component Table {
     row=Row {}
 
-    pub func grandTotal(&self): int {
+    pub func grandTotal(&self): sint32 {
         self.row.total() + self.row.count()
     }
 
-    pub func grow(&mut self): int {
+    pub func grow(&mut self): sint32 {
         self.row.count()
     }
 }
 
-func main(): int {
+func main(): sint32 {
     let mut table = Table {};
     table.grow();
     table.grandTotal()

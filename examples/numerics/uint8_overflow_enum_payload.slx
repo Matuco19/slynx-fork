@@ -1,0 +1,8 @@
+// xfail: 256 is out of range for uint8 (0..=255) and is rejected at variant construction.
+enum Byte {
+    Value(uint8)
+}
+
+func main(): void {
+    let byte = Byte.Value(256);
+}

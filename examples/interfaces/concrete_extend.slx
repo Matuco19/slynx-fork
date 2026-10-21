@@ -2,7 +2,7 @@
 // concrete self type — dispatches through the interface.
 interface Stringifiable {
     func stringify(&self): str
-    func length(&self): int
+    func length(&self): sint32
 }
 
 object Person {
@@ -11,7 +11,7 @@ object Person {
 
 extend Person: Stringifiable {
     func stringify(&self): str -> self.name;
-    func length(&self): int -> 1;
+    func length(&self): sint32 -> 1;
 }
 
 func main(): void {

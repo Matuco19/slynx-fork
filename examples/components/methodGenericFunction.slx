@@ -1,27 +1,15 @@
-// xfail: calling a method that declares its own type parameter crashes codegen.
-// The method below is well formed (`&self` is declared, so the receiver is not
-// miscounted), but with no explicit type arguments at the call site the
-// monomorphizer keeps the generic template as the call target
-// (crates/monomorphizer/src/lib.rs:867, the `new_generics.is_empty()` arm) instead
-// of instantiating it. The template is then neutralized as dead code, so codegen's
-// hoist never registers it and the call dereferences a missing entry:
-//
-//     panicked: no entry found for key
-//     at crates/codegen/src/lowerers/expressions.rs:119
-//
-// See docs/refactors/10-component-feature-gaps.md §3b. The sibling case §3a —
-// writing the call as `counter.id<int>(7)` — fails differently and more quietly,
-// with `Property 'id' is not recognized for type 'Counter'`, because the method
-// lookup uses the bare name and never sees the type arguments.
+// A method may declare its own type parameter. With `&self` as the first
+// parameter, the call `counter.id(7)` infers `U = sint32` from the explicit
+// argument and the monomorphizer instantiates the method for that type.
 component Counter {
-    pub prop value: int = 0;
+    pub prop value: sint32 = 0;
 
     pub func id<U>(&self, x: U): U {
         x
     }
 }
 
-func main(): int {
+func main(): sint32 {
     let counter = Counter {};
     counter.id(7)
 }

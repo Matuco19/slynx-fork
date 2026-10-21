@@ -5,7 +5,7 @@ interface Counter {
 }
 
 object Score {
-    value: int
+    value: sint32
 }
 
 extend Score: Counter {

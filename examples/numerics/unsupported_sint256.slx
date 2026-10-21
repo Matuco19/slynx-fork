@@ -1,0 +1,2 @@
+// xfail: bit widths are parsed as a u8, so sint256 is not a valid type name.
+func main(): sint256 { 1 }

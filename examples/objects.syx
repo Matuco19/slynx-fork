@@ -1,10 +1,10 @@
 component Counter {
-    pub prop count: int;
+    pub prop count: sint32;
 }
 
 object Pessoa{
     name: str,
-    age: int,
+    age: sint32,
 }
 
 alias Person = Pessoa;

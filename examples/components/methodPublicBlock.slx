@@ -3,31 +3,31 @@
 // counterpart of the `-> expr;` expression form used in namedChildren.slx.
 // Both forms must see a named child as a field of the parent.
 component Counter {
-    pub prop value: int = 0;
+    pub prop value: sint32 = 0;
 
-    pub func getValue(&self): int {
+    pub func getValue(&self): sint32 {
         self.value
     }
 
-    pub func bump(&mut self, amount: int): void {
+    pub func bump(&mut self, amount: sint32): void {
         self.value = self.value + amount;
     }
 }
 
 component Label {
     pub prop text: str;
-    pub prop width: int = 1;
+    pub prop width: sint32 = 1;
 }
 
 component Panel {
     title=Label { text: "hi", width: 3 }
 
-    pub func labelWidth(&self): int {
+    pub func labelWidth(&self): sint32 {
         self.title.width
     }
 }
 
-func main(): int {
+func main(): sint32 {
     let mut counter = Counter {};
     counter.bump(5);
 

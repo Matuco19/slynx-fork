@@ -1,5 +1,5 @@
 component A {
-    pub prop value: int = 1;
+    pub prop value: sint32 = 1;
 }
 
 component B {

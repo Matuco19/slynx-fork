@@ -9,6 +9,11 @@ mod terms;
 #[cfg(test)]
 mod terms_tests;
 
+#[derive(Debug)]
+pub struct IntegerTypeInfo {
+    pub bit_length: u8,
+    pub signed: bool,
+}
 pub struct HirViewer<'a, T> {
     pub(crate) hir: &'a SlynxHir<'a>,
     pub(crate) data: T,

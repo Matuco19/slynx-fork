@@ -1,4 +1,4 @@
-stylesheet Maria(color: int){
+stylesheet Maria(color: sint32){
 	styles {
 		default {
 			backgroundColor: color

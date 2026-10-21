@@ -1,25 +1,25 @@
 // Methods on a generic component are allowed to use concrete types even though
 // the component itself is generic: a `T`-typed prop is declared on the
-// component, while the methods below only mention `int`. `&mut self` must be
+// component, while the methods below only mention `sint32`. `&mut self` must be
 // able to write the component's own prop through a specialized instance.
 //
 // The boundary: mentioning the component's own type parameter `T` in a method
 // signature is a separate case, covered by methodGenericSignature.slx.
 component Box<T> {
     pub prop item: T;
-    pub prop count: int = 0;
+    pub prop count: sint32 = 0;
 
-    pub func bump(&mut self, amount: int): void {
+    pub func bump(&mut self, amount: sint32): void {
         self.count = self.count + amount;
     }
 
-    pub func describe(&self, label: str): int {
+    pub func describe(&self, label: str): sint32 {
         self.count
     }
 }
 
-func main(): int {
-    let mut box = Box<int> { item: 42 };
+func main(): sint32 {
+    let mut box = Box<sint32> { item: 42 };
     box.bump(2);
     box.describe("x")
 }

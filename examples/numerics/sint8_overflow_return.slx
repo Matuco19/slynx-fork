@@ -1,0 +1,7 @@
+// xpass: 128 is out of range for sint8 (-128..=127) but return expressions are
+// not checked against the declared return type yet.
+func overflow(): sint8 { 128 }
+
+func main(): void {
+    let value = overflow();
+}

@@ -1,0 +1,2 @@
+// xfail: the legacy uint type was removed in favour of uint32.
+func main(): uint { 1 }

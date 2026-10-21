@@ -1,0 +1,12 @@
+// 0 and 255 are the edges of the supported bit-width range.
+func signed_zero(): sint0 { 0 }
+func signed_max_width(): sint255 { 1 }
+func unsigned_zero(): uint0 { 0 }
+func unsigned_max_width(): uint255 { 1 }
+
+func main(): void {
+    let a = signed_zero();
+    let b = signed_max_width();
+    let c = unsigned_zero();
+    let d = unsigned_max_width();
+}

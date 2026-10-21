@@ -33,20 +33,20 @@ fn deduplicates_identical_instantiations() {
         "func identity<T>(x: T): T {
              x
          }
-         func main(): int {
-             let first = identity<int>(1);
-             let second = identity<int>(2);
+         func main(): sint32 {
+             let first = identity<sint32>(1);
+             let second = identity<sint32>(2);
              first + second
          }",
         |hir, dead| {
             // The generic template must be neutralized and reported as dead code.
             assert_eq!(dead, 1, "expected exactly the generic template to be dead");
 
-            // Both `identity<int>` call sites must share a single specialization.
+            // Both `identity<sint32>` call sites must share a single specialization.
             assert_eq!(
                 common::count_specializations(hir, "identity_"),
                 1,
-                "expected a single identity<int> specialization"
+                "expected a single identity<sint32> specialization"
             );
         },
     );
@@ -60,8 +60,8 @@ fn mangles_multiple_generic_parameters() {
         "func second<T, U>(first: T, second: U): U {
              second
          }
-         func main(): int {
-             let result = second<bool, int>(true, 20);
+         func main(): sint32 {
+             let result = second<bool, sint32>(true, 20);
              result
          }",
         |hir, dead| {
@@ -80,7 +80,7 @@ fn mangles_multiple_generic_parameters() {
             assert_eq!(
                 specialized.len(),
                 1,
-                "expected a single second<bool,int> specialization"
+                "expected a single second<bool,sint32> specialization"
             );
             assert_eq!(
                 specialized[0].matches('_').count(),
@@ -102,20 +102,20 @@ fn instantiates_nested_generic_calls() {
          func wrap<T>(x: T): T {
              identity<T>(x)
          }
-         func main(): int {
-             wrap<int>(42)
+         func main(): sint32 {
+             wrap<sint32>(42)
          }",
         |hir, dead| {
             assert_eq!(dead, 2, "expected both generic templates to be dead");
             assert_eq!(
                 common::count_specializations(hir, "wrap_"),
                 1,
-                "expected a single wrap<int> specialization"
+                "expected a single wrap<sint32> specialization"
             );
             assert_eq!(
                 common::count_specializations(hir, "identity_"),
                 1,
-                "expected a single identity<int> specialization"
+                "expected a single identity<sint32> specialization"
             );
         },
     );
@@ -129,8 +129,8 @@ fn rejects_wrong_generic_arity() {
         "func second<T, U>(first: T, second: U): U {
              second
          }
-         func main(): int {
-             second<int>(1, 2)
+         func main(): sint32 {
+             second<sint32>(1, 2)
          }",
         |_hir, _dead| {},
     );

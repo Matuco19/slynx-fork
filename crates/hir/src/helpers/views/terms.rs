@@ -5,9 +5,19 @@ use common::pool::DedupPoolId;
 use crate::{
     ComponentType, DescriptorId, EnumType, HirViewer, Owned, StructType,
     arrays::ArrayTerm,
-    term::{ConstantTerm, ExtensionNode, Term, TermId, TermNode, VarTerm},
+    helpers::IntegerTypeInfo,
+    term::{ConstantTerm, ExtensionNode, PrimitiveType, Term, TermId, TermNode, VarTerm},
     vector::VectorTerm,
 };
+
+impl Default for IntegerTypeInfo {
+    fn default() -> Self {
+        Self {
+            bit_length: 32,
+            signed: true,
+        } //sint32
+    }
+}
 
 impl<'a> HirViewer<'a, Owned<TermId>> {
     pub fn inner_type(self) -> HirViewer<'a, TermId> {
@@ -141,6 +151,20 @@ impl<'a> HirViewer<'a, TermId> {
     ///specialized receiver identity stays intact for method/interface lookup.
     pub fn concrete_type(self) -> HirViewer<'a, TermId> {
         self.dereference()
+    }
+
+    pub fn is_integer(self) -> Option<IntegerTypeInfo> {
+        match self.raw().node() {
+            TermNode::Primitive(PrimitiveType::Signed { bitsize }) => Some(IntegerTypeInfo {
+                bit_length: *bitsize,
+                signed: true,
+            }),
+            TermNode::Primitive(PrimitiveType::Unsigned { bitsize }) => Some(IntegerTypeInfo {
+                bit_length: *bitsize,
+                signed: false,
+            }),
+            _ => None,
+        }
     }
 
     pub fn is_application(self) -> Option<HirViewer<'a, (TermId, &'a Vec<TermId>)>> {

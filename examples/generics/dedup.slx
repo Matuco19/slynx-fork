@@ -2,8 +2,8 @@ func identity<T>(x: T): T {
     x
 }
 
-func main(): int {
-    let first = identity<int>(21);
-    let second = identity<int>(21);
+func main(): sint32 {
+    let first = identity<sint32>(21);
+    let second = identity<sint32>(21);
     first + second
 }

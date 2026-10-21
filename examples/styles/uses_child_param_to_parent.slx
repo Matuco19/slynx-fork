@@ -1,5 +1,5 @@
 import std;
-stylesheet Fg(color: int) {
+stylesheet Fg(color: sint32) {
     styles {
         foregroundColor: Color(inner:color),
         hover.click(0.3) {
@@ -8,7 +8,7 @@ stylesheet Fg(color: int) {
     }
 }
 
-stylesheet Bg(color: int) uses Fg(color) {
+stylesheet Bg(color: sint32) uses Fg(color) {
     styles {
         backgroundColor: Color(inner:0x0000ff)
     }

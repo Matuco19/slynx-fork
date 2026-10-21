@@ -4,27 +4,27 @@
 component Box<T> {
     pub prop item: T;
 
-    pub func doubled(&self, n: int): int {
+    pub func doubled(&self, n: sint32): sint32 {
         n * 2
     }
 
-    pub func peek(&self): int {
+    pub func peek(&self): sint32 {
         self.item
     }
 }
 
 component Holder {
-    first=Box<int> { item: 3 }
+    first=Box<sint32> { item: 3 }
     second=Box<bool> { item: true }
 
-    pub func viaMethod(&self): int {
+    pub func viaMethod(&self): sint32 {
         self.first.doubled(4)
     }
 
-    pub func viaProp(&self): int -> self.first.item;
+    pub func viaProp(&self): sint32 -> self.first.item;
 }
 
-func main(): int {
+func main(): sint32 {
     let holder = Holder {};
     holder.viaMethod()
 }

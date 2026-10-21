@@ -3,7 +3,7 @@ component Box<T> {
 }
 
 component Main {
-    Box<int> {
+    Box<sint32> {
         item: 42
     }
 }

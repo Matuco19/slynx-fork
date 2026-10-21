@@ -4,7 +4,7 @@ enum Thing<T, U> {
     Both(T, U)
 }
 
-func main(): int {
+func main(): sint32 {
     let suamae = Thing.Both(1,4);
     if suamae matches Both(1, 4) {
         0

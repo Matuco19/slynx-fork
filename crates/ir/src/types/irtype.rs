@@ -10,16 +10,11 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum IRType {
-    I8,
-    U8,
-    I16,
-    U16,
-    I32,
-    U32,
-    I64,
-    U64,
+    I(u8),
+    U(u8),
     ISIZE,
     USIZE,
+    F16,
     F32,
     F64,
     STR,

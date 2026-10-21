@@ -2,7 +2,7 @@ component Box<T> {
     prop value: T;
 }
 
-func main(): int {
-    let box = Box<int> { value: 3 };
+func main(): sint32 {
+    let box = Box<sint32> { value: 3 };
     box.value
 }

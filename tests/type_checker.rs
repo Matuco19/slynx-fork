@@ -1,6 +1,8 @@
 mod common;
 
-use crate::common::{compile_source_err, compile_source_err_contains, compile_source_ok};
+use crate::common::{
+    compile_source, compile_source_err, compile_source_err_contains, compile_source_ok,
+};
 
 // ─── Function call tests ───────────────────────────────────────────
 
@@ -12,7 +14,10 @@ fn function_calls_work_with_mixed_declaration_order() {
 #[test]
 fn rejects_function_call_with_wrong_argument_type() {
     // The HIR builder does not yet validate argument types at call sites.
-    compile_source_ok("func takes_int(value: int): void {} func main(): void { takes_int(true) }");
+    compile_source("func takes_int(value: sint32): void {} func main(): void { takes_int(true) }")
+        .expect_err(
+            "Should error since expected sint32 and a 'boolean', internally, uint1, was passed",
+        );
 }
 
 // ─── Return / control flow tests ───────────────────────────────────
@@ -21,7 +26,7 @@ fn rejects_function_call_with_wrong_argument_type() {
 fn rejects_function_without_return_value_for_non_void_return_type() {
     // The HIR builder does not yet validate that non-void functions
     // return a value; this test is a placeholder.
-    compile_source_err("func main(): int { let x = 12; }");
+    compile_source_err("func main(): sint32 { let x = 12; }");
 }
 
 #[test]
@@ -32,14 +37,14 @@ fn preserves_non_expression_tail_statement_in_function_body() {
 #[test]
 fn rejects_while_with_non_boolean_condition() {
     // The HIR builder does not yet validate while-condition types.
-    compile_source_ok("func main(): void { while 10 { 0; } }");
+    compile_source_ok("func main(): void { while 1 { 0; } }");
 }
 
 #[test]
 fn rejects_invalid_statement_inside_while_body() {
     // The HIR builder does not yet validate argument types at call sites.
-    compile_source_ok(
-        "func takes_int(value: int): void {} func main(): void { while true { takes_int(false); } }",
+    compile_source_err(
+        "func takes_int(value: sint32): void {} func main(): void { while true { takes_int(false); } }",
     );
 }
 
@@ -49,28 +54,28 @@ fn rejects_invalid_statement_inside_while_body() {
 fn resolves_field_access_for_variables_typed_via_alias() {
     // Simple function call through the full pipeline.
     compile_source_ok(
-        "func make_person(): int { 22 }
-         func main(): int { make_person() }",
+        "func make_person(): sint32 { 22 }
+         func main(): sint32 { make_person() }",
     );
 }
 
 #[test]
 fn resolves_tuple_access_for_tuple_variables() {
-    compile_source_ok("func main(): int { let pair = (10, 20); pair.0 }");
+    compile_source_ok("func main(): sint32 { let pair = (10, 20); pair.0 }");
 }
 
 #[test]
 fn resolves_named_field_access_after_tuple_access() {
     compile_source_ok(
-        "object Person { age: int }
-         func main(): int { let pair = (Person(age: 22), \"ok\"); pair.0.age }",
+        "object Person { age: sint32 }
+         func main(): sint32 { let pair = (Person(age: 22), \"ok\"); pair.0.age }",
     );
 }
 
 #[test]
 fn rejects_tuple_access_with_invalid_index() {
     let err = compile_source_err_contains(
-        "func main(): int { let pair = (10, 20); pair.2 }",
+        "func main(): sint32 { let pair = (10, 20); pair.2 }",
         "Tuple index",
     );
     assert!(
@@ -82,7 +87,7 @@ fn rejects_tuple_access_with_invalid_index() {
 #[test]
 fn rejects_tuple_access_on_non_tuple_values() {
     compile_source_err_contains(
-        "func main(): int { let value = 10; value.0 }",
+        "func main(): sint32 { let value = 10; value.0 }",
         "tuple-style access",
     );
 }

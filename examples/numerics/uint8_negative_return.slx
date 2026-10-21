@@ -1,0 +1,8 @@
+// xpass: a negative value is out of range for uint8 (0..=255) but return
+// expressions are not checked against the declared return type yet. Unary minus
+// is not supported, so the negative value is built as 0 - 1.
+func underflow(): uint8 { 0 - 1 }
+
+func main(): void {
+    let value = underflow();
+}

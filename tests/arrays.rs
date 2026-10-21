@@ -16,5 +16,5 @@ fn test_array_literal_with_missing_comma_is_rejected() {
 /// Elements without a separating comma must not parse as a vector
 #[test]
 fn test_vector_literal_with_missing_comma_is_rejected() {
-    common::compile_source_err_contains("func main(): void { let v: []int = {1 2}; }", "','");
+    common::compile_source_err_contains("func main(): void { let v: []sint32 = {1 2}; }", "','");
 }

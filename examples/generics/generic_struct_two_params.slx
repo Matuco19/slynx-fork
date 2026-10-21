@@ -4,6 +4,6 @@ object Pair<T, U> {
 }
 
 func main(): bool {
-    let p = Pair<int, bool>(first: 1, second: true);
+    let p = Pair<sint32, bool>(first: 1, second: true);
     p.second
 }

@@ -1,7 +1,7 @@
 import styles using {Background};
 import utils.components using {Text, Div};
 
-stylesheet MyStyleOtherStyle(color: int) uses Background(color) {
+stylesheet MyStyleOtherStyle(color: sint32) uses Background(color) {
 	styles {
 		default {
 			backgroundColor: color

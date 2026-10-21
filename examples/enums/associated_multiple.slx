@@ -1,5 +1,5 @@
 enum Name {
-    Associated2(str, int, f64)
+    Associated2(str, sint32, f64)
 }
 
 func main(): bool {

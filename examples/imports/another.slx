@@ -1,2 +1,2 @@
 import styles;
-pub stylesheet BgGreen(color: int) uses Background((color & 0xff) << 8) {}
+pub stylesheet BgGreen(color: sint32) uses Background((color & 0xff) << 8) {}

@@ -48,11 +48,20 @@ pub enum MissingFeature {
 #[derive(Debug, Clone)]
 pub enum ExpectedTypeUsage {
     InterfaceType,
+    FloatType,
+    IntegerType,
 }
 
 /// All possible error kinds that can occur during HIR generation.
 #[derive(Debug)]
 pub enum HIRErrorKind {
+    IntegerOutOfBounds {
+        value: i64,
+        numeric: TermId,
+        min: i128,
+        max: i128,
+    },
+
     UnexpectedTypeUsage {
         actual: TermId,
         expected_usage: ExpectedTypeUsage,
@@ -277,6 +286,26 @@ impl HIRError {
         }
     }
 
+    pub fn integer_out_of_bounds(
+        file: FileId,
+        value: i64,
+        numeric_info: TermId,
+        min: i128,
+        max: i128,
+        span: Span,
+    ) -> Self {
+        Self::new(
+            file,
+            HIRErrorKind::IntegerOutOfBounds {
+                value,
+                numeric: numeric_info,
+                min,
+                max,
+            },
+            span,
+        )
+    }
+
     pub fn missing_interface_method(file: FileId, name: SymbolPointer, span: Span) -> Self {
         Self::new(
             file,
@@ -285,6 +314,26 @@ impl HIRError {
         )
     }
 
+    pub fn expected_integer_type(file: FileId, found: TermId, span: Span) -> Self {
+        Self::new(
+            file,
+            HIRErrorKind::UnexpectedTypeUsage {
+                expected_usage: ExpectedTypeUsage::IntegerType,
+                actual: found,
+            },
+            span,
+        )
+    }
+    pub fn expected_float_type(file: FileId, found: TermId, span: Span) -> Self {
+        Self::new(
+            file,
+            HIRErrorKind::UnexpectedTypeUsage {
+                expected_usage: ExpectedTypeUsage::FloatType,
+                actual: found,
+            },
+            span,
+        )
+    }
     pub fn expected_interface_type(file: FileId, found: TermId, span: Span) -> Self {
         Self::new(
             file,
@@ -646,6 +695,9 @@ impl HIRError {
 impl std::fmt::Display for HIRError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.kind {
+            HIRErrorKind::IntegerOutOfBounds { .. } => {
+                write!(f, "Integer out of bounds")
+            }
             HIRErrorKind::MissingExtensionMethod { .. } => {
                 write!(f, "Method not found for interface",)
             }

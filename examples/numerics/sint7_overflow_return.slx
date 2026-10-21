@@ -1,0 +1,7 @@
+// xpass: 64 is out of range for sint7 (-64..=63) but return expressions are
+// not checked against the declared return type yet.
+func overflow(): sint7 { 64 }
+
+func main(): void {
+    let value = overflow();
+}

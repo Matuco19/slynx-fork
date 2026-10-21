@@ -1,7 +1,7 @@
 enum Name {
     Struct {
         name: str,
-        otherName: int,
+        otherName: sint32,
         ratio: f64
     }
 }

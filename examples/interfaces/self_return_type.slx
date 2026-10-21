@@ -5,7 +5,7 @@ interface Cloneable {
 }
 
 object Counter {
-    value: int
+    value: sint32
 }
 
 extend Counter: Cloneable {

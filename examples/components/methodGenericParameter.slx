@@ -6,12 +6,12 @@
 component Box<T> {
     pub prop item: T;
 
-    pub func replace(&self, value: T): int {
+    pub func replace(&self, value: T): sint32 {
         1
     }
 }
 
-func main(): int {
-    let box = Box<int> { item: 1 };
+func main(): sint32 {
+    let box = Box<sint32> { item: 1 };
     box.replace(2)
 }

@@ -2,11 +2,11 @@
 // currently NOT rejected (the literal builders ignore the expected payload
 // type). This documents a missing validation that should eventually error.
 enum Result {
-    Ok(int),
+    Ok(sint32),
     Err(str)
 }
 
 func main(): bool {
-    let a = Result.Ok("not an int");
+    let a = Result.Ok("not an sint32");
     true
 }

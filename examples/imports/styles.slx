@@ -1,6 +1,6 @@
 import std;
 import brace_alias_import;
-pub stylesheet Background(color: int) {
+pub stylesheet Background(color: sint32) {
 	styles {
 		backgroundColor: Color(inner:color)
 	}

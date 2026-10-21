@@ -15,6 +15,9 @@ use crate::{
 impl SlynxContext {
     fn hir_error_to_string(&self, hir: &SlynxHir, err: &HIRError) -> String {
         match &err.kind {
+            HIRErrorKind::IntegerOutOfBounds { value, numeric, min, max } => {
+                format!("Number {value} is out of bounds for integer type '{}'. Write it in bounds of {min} to {max}", hir.view(*numeric).pretty_name())
+            }
             HIRErrorKind::MissingExtensionMethod { method } => {
                 format!("Method '{}' not found but requested by interface", hir.get_name(*method))
             }
@@ -22,7 +25,7 @@ impl SlynxContext {
                 format!("Unimplemented feature: {:?}", feature)
             }
             HIRErrorKind::UnexpectedTypeUsage { actual, expected_usage } => {
-                format!("Expected type '{expected_usage:?}', but got '{}'", hir.view(*actual).pretty_name())
+                format!("Expected type to be used such as a '{expected_usage:?}', but instead got '{}'", hir.view(*actual).pretty_name())
             }
             HIRErrorKind::InvalidEnumUsage(ty) => {
                 format!("Type '{}' is being used as an enum, even though it isn't", hir.view(*ty).pretty_name())

@@ -1,0 +1,11 @@
+// xfail: generic struct field values are checked against the field type in the HIR builder
+object Box<T> {
+    data: T
+}
+
+func main(): void {
+    let a = Box<sint32>(data: 300);   // float literal → T = sint32
+    let b = Box<sint32>(data: true);   // bool literal → T = sint32
+    let c = Box<[]sint32>(data: [30]); // float literal → T = []sint32
+    let d = Box<bool>(data: 1);        // integer literal → T = bool
+}

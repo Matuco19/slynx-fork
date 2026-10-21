@@ -2,7 +2,7 @@ object Option<T> {
     value: T
 }
 
-func main(): int {
-    let some = Option<int>(value: 42);
+func main(): sint32 {
+    let some = Option<sint32>(value: 42);
     some.value
 }

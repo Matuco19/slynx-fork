@@ -432,20 +432,20 @@ mod tests {
 
     #[test]
     fn get_line_info_handles_single_line_sources_without_trailing_newline() {
-        let (context, path, dir) = temp_context("func main(): int {", "single-line");
+        let (context, path, dir) = temp_context("func main(): sint32 {", "single-line");
 
         let info = context.get_line_info(&path, 5);
 
         assert_eq!(info.line, 1);
         assert_eq!(info.column_start, 6);
-        assert_eq!(info.src, "func main(): int {");
+        assert_eq!(info.src, "func main(): sint32 {");
 
         fs::remove_dir_all(dir).expect("temp dir should be removed");
     }
 
     #[test]
     fn get_line_info_handles_last_line_without_trailing_newline() {
-        let source = "func main(): int {\n    let value = 1;\n    value";
+        let source = "func main(): sint32 {\n    let value = 1;\n    value";
         let (context, path, dir) = temp_context(source, "last-line");
 
         let last_line_start = source.rfind('\n').expect("last line should exist") + 1;

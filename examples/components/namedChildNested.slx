@@ -3,9 +3,9 @@
 // separate component type, so this also checks that the child's own type is used
 // rather than the parent's.
 component Leaf {
-    pub prop value: int = 1;
+    pub prop value: sint32 = 1;
 
-    pub func read(&self): int {
+    pub func read(&self): sint32 {
         self.value
     }
 }
@@ -13,7 +13,7 @@ component Leaf {
 component Branch {
     leaf=Leaf { value: 7 }
 
-    pub func read(&self): int {
+    pub func read(&self): sint32 {
         self.leaf.read()
     }
 }
@@ -21,10 +21,10 @@ component Branch {
 component Trunk {
     branch=Branch {}
 
-    pub func readExpr(&self): int -> self.branch.read();
+    pub func readExpr(&self): sint32 -> self.branch.read();
 }
 
-func main(): int {
+func main(): sint32 {
     let trunk = Trunk {};
     trunk.readExpr()
 }

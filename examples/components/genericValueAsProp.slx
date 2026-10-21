@@ -13,15 +13,15 @@ object Wrapper<T> {
 
 component Holder<T> {
     pub prop pair: Pair<T, T>;
-    pub prop wrapped: Wrapper<int>;
+    pub prop wrapped: Wrapper<sint32>;
     pub prop item: T;
 }
 
 func main(): void {
-    let direct = Pair<int, bool>(a: 1, b: true);
-    let holder = Holder<int> {
-        pair: Pair<int, int>(a: 1, b: 2),
-        wrapped: Wrapper<int>(value: 3),
+    let direct = Pair<sint32, bool>(a: 1, b: true);
+    let holder = Holder<sint32> {
+        pair: Pair<sint32, sint32>(a: 1, b: 2),
+        wrapped: Wrapper<sint32>(value: 3),
         item: 4,
     };
 }

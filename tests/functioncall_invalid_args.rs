@@ -23,7 +23,7 @@ fn rejects_call_arity(source: &str, expected: usize, received: usize) {
 #[test]
 fn rejects_function_call_with_extra_arg() {
     rejects_call_arity(
-        "func add(a: int, b: int): int { a + b } func main(): void { add(1, 2, 3) }",
+        "func add(a: sint32, b: sint32): sint32 { a + b } func main(): void { add(1, 2, 3) }",
         2,
         3,
     );
@@ -32,7 +32,7 @@ fn rejects_function_call_with_extra_arg() {
 #[test]
 fn rejects_function_call_with_missing_arg() {
     rejects_call_arity(
-        "func add(a: int, b: int): int { a + b } func main(): void { add(1) }",
+        "func add(a: sint32, b: sint32): sint32 { a + b } func main(): void { add(1) }",
         2,
         1,
     );

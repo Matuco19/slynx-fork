@@ -1,0 +1,7 @@
+// xpass: 256 is out of range for uint8 (0..=255) but return expressions are not
+// checked against the declared return type yet.
+func overflow(): uint8 { 256 }
+
+func main(): void {
+    let value = overflow();
+}

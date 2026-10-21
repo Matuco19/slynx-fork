@@ -1,6 +1,8 @@
 mod common;
 
-use crate::common::{compile_source_err, compile_source_err_contains, compile_source_ok};
+use crate::common::{
+    compile_source, compile_source_err, compile_source_err_contains, compile_source_ok,
+};
 
 // ─── Function call tests ───────────────────────────────────────────
 
@@ -12,9 +14,10 @@ fn function_calls_work_with_mixed_declaration_order() {
 #[test]
 fn rejects_function_call_with_wrong_argument_type() {
     // The HIR builder does not yet validate argument types at call sites.
-    compile_source_ok(
-        "func takes_int(value: sint32): void {} func main(): void { takes_int(true) }",
-    );
+    compile_source("func takes_int(value: sint32): void {} func main(): void { takes_int(true) }")
+        .expect_err(
+            "Should error since expected sint32 and a 'boolean', internally, uint1, was passed",
+        );
 }
 
 // ─── Return / control flow tests ───────────────────────────────────
@@ -34,13 +37,13 @@ fn preserves_non_expression_tail_statement_in_function_body() {
 #[test]
 fn rejects_while_with_non_boolean_condition() {
     // The HIR builder does not yet validate while-condition types.
-    compile_source_ok("func main(): void { while 10 { 0; } }");
+    compile_source_ok("func main(): void { while 1 { 0; } }");
 }
 
 #[test]
 fn rejects_invalid_statement_inside_while_body() {
     // The HIR builder does not yet validate argument types at call sites.
-    compile_source_ok(
+    compile_source_err(
         "func takes_int(value: sint32): void {} func main(): void { while true { takes_int(false); } }",
     );
 }

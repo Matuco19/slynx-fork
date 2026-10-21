@@ -132,6 +132,10 @@ impl ExpressionBuilder {
                             context,
                         },
                     )?;
+                    {
+                        let expr_ty = queue.hir.view(expr.data).ty();
+                        self.unify_terms(queue, expr_ty.term, *ty, span)?;
+                    }
                     if let Some(var) = queue.hir.view(*ty).raw().is_var_type() {
                         generics.try_set(var.index as usize, queue.hir.view(expr.data).ty().term);
                     }

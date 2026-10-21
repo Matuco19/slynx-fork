@@ -135,14 +135,21 @@ impl ExpressionBuilder {
                             generics,
                             obj.fields()[*idx].data.ty,
                         );
-                        self.build_expression(
+                        let out = self.build_expression(
                             queue,
                             ExpressionDescriptor {
                                 target: field.data.expr,
                                 expected: Some(field_ty),
                                 context,
                             },
-                        )?
+                        )?;
+                        self.unify_terms(
+                            queue,
+                            queue.hir.view(out.data).ty().term,
+                            field_ty,
+                            span,
+                        )?;
+                        out
                     }),
                     None => missing.push(obj.fields()[i].data.name),
                 }

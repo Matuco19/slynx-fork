@@ -23,7 +23,9 @@ use crate::{
             },
             components::ComponentExpressionDescriptor,
             field_access::FieldAccessDescriptor,
-            literals::{DereferenceExpressionDescriptor, ReferenceExpressionDescriptor},
+            literals::{
+                DereferenceExpressionDescriptor, NegateExpressionDescriptor, ReferenceExpressionDescriptor,
+            },
         },
     },
     context::ScopeContext,
@@ -233,6 +235,15 @@ impl ExpressionBuilder {
                 queue,
                 DereferenceExpressionDescriptor {
                     target: *expr,
+                    context,
+                    expected,
+                },
+            )?,
+            ASTExpression::Negate(expr) => self.build_negate(
+                queue,
+                NegateExpressionDescriptor {
+                    target: *expr,
+                    span: target.span,
                     context,
                     expected,
                 },

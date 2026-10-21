@@ -6,12 +6,12 @@ use common::{compile_source_err_contains, compile_source_ok};
 #[test]
 fn negates_numeric_literals_and_variables() {
     compile_source_ok(
-        "func negate_int(value: int): int -> -value;
+        "func negate_int(value: sint32): sint32 -> -value;
          func negate_float(value: f32): f32 -> -value;
-         func main(): int {
-             let literal: int = -5;
+         func main(): sint32 {
+             let literal: sint32= -5;
              let float_literal: f32 = -1.5;
-             let negated: int = negate_int(literal);
+             let negated: sint32 = negate_int(literal);
              let negated_float: f32 = negate_float(float_literal);
              negated
          }",
@@ -21,5 +21,5 @@ fn negates_numeric_literals_and_variables() {
 /// `-` is only defined for signed integers and floats
 #[test]
 fn rejects_negation_of_a_non_numeric_value() {
-    compile_source_err_contains("func main(): int { -true }", "unary '-'");
+    compile_source_err_contains("func main(): bool { -true }", "unary '-'");
 }

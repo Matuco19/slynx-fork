@@ -24,7 +24,8 @@ use crate::{
             components::ComponentExpressionDescriptor,
             field_access::FieldAccessDescriptor,
             literals::{
-                DereferenceExpressionDescriptor, NegateExpressionDescriptor, ReferenceExpressionDescriptor,
+                DereferenceExpressionDescriptor, NegateExpressionDescriptor,
+                ReferenceExpressionDescriptor,
             },
         },
     },

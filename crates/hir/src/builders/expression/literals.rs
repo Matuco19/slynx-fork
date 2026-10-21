@@ -76,6 +76,16 @@ impl ExpressionBuilder {
         queue: &HirQueueBuilder,
         descriptor: NegateExpressionDescriptor<'_>,
     ) -> Result<HirExpression> {
+        if let Some(expected) = descriptor.expected
+            && let Some(integer_info) = queue.hir.view(expected).is_integer()
+            && integer_info.signed == false
+        {
+            return Err(HIRError::invalid_unary_expression(
+                self.file(),
+                expected,
+                descriptor.span,
+            ));
+        }
         let build_expr = self.build_expression(
             queue,
             ExpressionDescriptor {
